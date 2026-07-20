@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+sample_data/_uploaded_tmp.xlsx
+
+# Real student data - never version-controlled
+רשימה כללית לאיזונית.xlsx
+סריקה.5.pdf
+sample_data/reference_scan.png
