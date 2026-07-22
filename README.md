@@ -1,10 +1,49 @@
 # שיבוץ תלמידות לכיתות ז' — Class Assignment App
 
-A local-first Streamlit application that assigns 7th-grade students into
-balanced classes under hard and soft constraints, using Google OR-Tools
-CP-SAT.
+A local-first application that assigns 7th-grade students into balanced
+classes under hard and soft constraints, using Google OR-Tools CP-SAT.
 
-## Setup
+The core logic lives in `src/` and is shared by two interchangeable UIs:
+
+- **Next.js + FastAPI** (recommended) — a full RTL Hebrew wizard UI with
+  proper stepper navigation, charts, and data tables, talking to a small
+  FastAPI backend that wraps `src/`.
+- **Streamlit** (`app.py`) — the original lightweight single-process app,
+  kept as-is as a fallback.
+
+## Setup — Next.js + FastAPI (recommended)
+
+Two terminals, both from the repo root:
+
+```
+# Terminal 1 — backend (installs fastapi/uvicorn/python-multipart into the
+# existing venv the first time):
+.venv\Scripts\python.exe -m pip install fastapi uvicorn python-multipart
+.venv\Scripts\python.exe -m uvicorn backend.main:app --reload --port 8000
+
+# Terminal 2 — frontend:
+cd frontend
+npm install
+npm run dev
+```
+
+Then open http://localhost:3000 (redirects to the step-1 wizard page). The
+frontend talks to the backend at `http://localhost:8000` by default (see
+`frontend/.env.local`, `NEXT_PUBLIC_API_BASE`). Each browser gets its own
+`X-Session-Id` (stored in `localStorage`), and the backend keeps an
+in-memory session per id — no database, no auth, single machine only.
+
+Backend layout: `backend/main.py` (app + CORS), `backend/session_store.py`
+(in-memory per-session state mirroring what `st.session_state` held),
+`backend/schemas.py` (Pydantic models), `backend/routers/{workbook,
+validation, config, optimize, export}.py` — each endpoint is a thin wrapper
+around the existing `src/*` functions with no logic changes.
+
+Frontend layout: `frontend/app/steps/<step>/page.tsx` (one route per wizard
+step), `frontend/components/` (stepper shell, tabs, data table, form
+fields, UI primitives), `frontend/lib/api.ts` (typed fetch client).
+
+## Setup — Streamlit fallback
 
 ```
 pip install -r requirements.txt
@@ -14,7 +53,7 @@ streamlit run app.py
 (This project uses the existing venv at `.venv`; on Windows:
 `.venv\Scripts\python.exe -m streamlit run app.py`.)
 
-Run tests:
+## Tests
 
 ```
 .venv\Scripts\python.exe -m pytest tests/ -v
@@ -152,7 +191,9 @@ only in-memory DataFrames are exported to a new bytes buffer.
 ## Project layout
 
 ```
-app.py                     Streamlit UI, wires the full workflow
+app.py                     Streamlit UI, wires the full workflow (fallback)
+backend/                   FastAPI wrapper over src/ (see above)
+frontend/                  Next.js RTL wizard UI (see above)
 src/
   excel_loader.py           workbook loading (no hardcoded column letters)
   column_mapping.py         semantic field mapping + manual-entry support

@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+/* Force light mode only: dark: utilities now require an explicit .dark
+   class on an ancestor, which nothing in this app ever sets, so the OS/
+   browser dark-mode preference can no longer flip the UI to a black theme. */
+@variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+  --background: #f8fafc;
+  --foreground: #0f172a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-rubik);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+:focus-visible {
+  outline: 2px solid #0d9488;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
