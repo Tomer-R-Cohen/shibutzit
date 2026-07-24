@@ -7,6 +7,9 @@ import pandas as pd
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile
 
 from src.column_mapping import (
+    FIELD_ETHIOPIAN_ORIGIN,
+    FIELD_HAMAR,
+    FIELD_INCLUSION,
     FIELD_LABELS_HE,
     FIELD_STUDENT_ID,
     OPTIONAL_MANUAL_FIELDS,
@@ -23,6 +26,28 @@ from ..session_store import store
 from ..utils import df_records, require
 
 router = APIRouter()
+
+
+# When the data contains zero students of a category, requiring a per-class
+# minimum for it is mathematically impossible and makes every solve infeasible
+# (e.g. the source workbook has no שילוב/ח"מ columns, so those read as 0). Lower
+# such a minimum to 0 so the default flow produces an assignment. We only ever
+# lower a minimum, never raise it, so a user's own settings for categories that
+# do exist are left untouched.
+_MIN_FIELDS = [
+    (FIELD_INCLUSION, "min_inclusion_per_class", "שילוב"),
+    (FIELD_HAMAR, "min_hamar_per_class", 'ח"מ'),
+    (FIELD_ETHIOPIAN_ORIGIN, "min_ethiopian_per_class", "מוצא אתיופי"),
+]
+
+
+def clamp_zero_minimums(cfg, df) -> list[str]:
+    adjusted: list[str] = []
+    for field, attr, label in _MIN_FIELDS:
+        if field in df.columns and int(df[field].sum()) == 0 and getattr(cfg, attr, 0) > 0:
+            setattr(cfg, attr, 0)
+            adjusted.append(label)
+    return adjusted
 
 
 @router.post("/api/workbook/load")
@@ -115,23 +140,56 @@ async def apply_mapping_endpoint(req: MappingSetRequest, x_session_id: str = Hea
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    sess.mapped_df = mapped
-    manual_needed = [f for f in OPTIONAL_MANUAL_FIELDS if f in cm.manual_fields]
+    # Seed an empty manual-entry table on first mapping. When one already exists
+    # (typed earlier, or restored from disk), fold it back into the mapped table
+    # so re-applying the mapping — which the frontend does on every load — never
+    # drops previously entered category data.
     if sess.manual_entry_df is None:
         sess.manual_entry_df = build_empty_manual_frame(mapped[FIELD_STUDENT_ID].tolist())
+    else:
+        try:
+            mapped = apply_mapping(wb.raw_df, cm, manual_df=sess.manual_entry_df)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    sess.mapped_df = mapped
+    manual_needed = [f for f in OPTIONAL_MANUAL_FIELDS if f in cm.manual_fields]
+    adjusted = clamp_zero_minimums(sess.solver_config, mapped)
+    store.save(sess)
 
     return {
         "student_count": len(mapped),
         "manual_fields_needed": manual_needed,
         "manual_entry": df_records(sess.manual_entry_df),
+        "adjusted_minimums": adjusted,
     }
+
+
+@router.get("/api/students")
+async def get_students(x_session_id: str = Header(...)):
+    """The full mapped student list (file-derived fields + manually entered
+    category fields), for the data-screen list/editor."""
+    sess = store.get_or_create(x_session_id)
+    df = require(sess.mapped_df, "יש להשלים תחילה טעינה ומיפוי.")
+    return {"rows": df_records(df), "count": len(df)}
 
 
 @router.get("/api/mapping/manual-entry")
 async def get_manual_entry(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     df = require(sess.manual_entry_df, "יש להשלים תחילה את שלב המיפוי.")
-    return {"rows": df_records(df)}
+    # Provide id -> display name so the editor can show who each row is,
+    # without making the name an editable/round-tripped manual field.
+    names: dict[str, str] = {}
+    mapped = sess.mapped_df
+    if mapped is not None and FIELD_STUDENT_ID in mapped.columns:
+        from src.column_mapping import FIELD_FIRST_NAME, FIELD_LAST_NAME
+
+        for _, row in mapped.iterrows():
+            first = str(row.get(FIELD_FIRST_NAME, "") or "").strip()
+            last = str(row.get(FIELD_LAST_NAME, "") or "").strip()
+            names[str(row[FIELD_STUDENT_ID])] = f"{first} {last}".strip()
+    return {"rows": df_records(df), "names": names}
 
 
 @router.post("/api/mapping/manual-entry")
@@ -151,6 +209,8 @@ async def update_manual_entry(payload: dict, x_session_id: str = Header(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     sess.mapped_df = mapped
+    clamp_zero_minimums(sess.solver_config, mapped)
+    store.save(sess)
     return {"student_count": len(mapped), "manual_entry": df_records(new_df)}
 
 
@@ -167,4 +227,5 @@ async def import_manual_entry(file: UploadFile = File(...), x_session_id: str = 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"שגיאה בייבוא: {e}")
     sess.manual_entry_df = imported
+    store.save(sess)
     return {"rows": df_records(imported)}

@@ -22,4 +22,5 @@ async def get_config(x_session_id: str = Header(...)):
 async def set_config(cfg: SolverConfigModel, x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     sess.solver_config = SolverConfig(**cfg.model_dump())
+    store.save(sess)
     return asdict(sess.solver_config)

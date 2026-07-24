@@ -28,6 +28,7 @@ async def set_locking(req: LockingRequest, x_session_id: str = Header(...)):
                 sid = sid_str
             locked[sid] = int(cls) - 1
     sess.locked_assignment = locked
+    store.save(sess)
     return {"locked_count": len(locked)}
 
 

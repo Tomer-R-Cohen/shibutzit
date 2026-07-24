@@ -47,7 +47,7 @@ export function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
     initialState: { pagination: { pageSize: 20 } },
   });
 
-  if (rows.length === 0) return <p className="p-4 text-sm text-slate-400">אין נתונים להצגה</p>;
+  if (rows.length === 0) return <p className="p-4 text-sm text-[var(--cw-ink-3)]">אין נתונים להצגה</p>;
 
   return (
     <div>
@@ -55,7 +55,7 @@ export function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
         placeholder="חיפוש..."
         value={globalFilter}
         onChange={(e) => table.setGlobalFilter(e.target.value)}
-        className="mb-3 w-full max-w-xs border-b border-slate-300 bg-transparent px-1 py-1.5 text-sm focus:border-teal-600 focus:outline-none"
+        className="mb-3 w-full max-w-xs border-b border-[var(--cw-line)] bg-transparent px-1 py-1.5 text-sm focus:border-[var(--cw-accent)] focus:outline-none"
       />
       <div className="max-h-[520px] overflow-auto">
         <table className="w-full min-w-max text-right text-sm">
@@ -66,7 +66,7 @@ export function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
                   <th
                     key={h.id}
                     onClick={h.column.getToggleSortingHandler()}
-                    className="cursor-pointer whitespace-nowrap border-b border-slate-200 px-3 py-2 font-medium text-slate-500 select-none"
+                    className="cursor-pointer whitespace-nowrap border-b border-[var(--cw-line)] px-3 py-2 font-medium text-[var(--cw-ink-2)] select-none"
                   >
                     {flexRender(h.column.columnDef.header, h.getContext())}
                     {{ asc: " ▲", desc: " ▼" }[h.column.getIsSorted() as string] ?? ""}
@@ -75,11 +75,11 @@ export function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
               </tr>
             ))}
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-[var(--cw-line-2)]">
             {table.getRowModel().rows.map((row) => (
-              <tr key={row.id} className="hover:bg-slate-50">
+              <tr key={row.id} className="hover:bg-[var(--cw-panel)]">
                 {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="whitespace-nowrap px-3 py-1.5 text-slate-700">
+                  <td key={cell.id} className="whitespace-nowrap px-3 py-1.5 text-[var(--cw-ink)]">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}

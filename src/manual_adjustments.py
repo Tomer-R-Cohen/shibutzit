@@ -42,7 +42,7 @@ class AdjustmentState:
 def apply_editor_dataframe(
     state: AdjustmentState, edited_df: pd.DataFrame, class_column: str, id_column: str = FIELD_STUDENT_ID
 ) -> AdjustmentState:
-    """Apply changes from an st.data_editor-style DataFrame back into state.
+    """Apply changes from an editor-style (one-row-per-student) DataFrame back into state.
 
     Args:
         state: current AdjustmentState (mutated in place and returned).

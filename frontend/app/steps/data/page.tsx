@@ -1,518 +1,430 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import clsx from "clsx";
-import { Button, ErrorBanner, InfoBanner, Skeleton, SimpleTable, StatTile, StatusIndicator } from "@/components/ui/primitives";
-import { AccordionSection } from "@/components/Accordion";
+import { Button, EmptyState } from "@/components/ui/primitives";
+import { DataPageSkeleton } from "@/components/Skeletons";
+import { Icon } from "@/components/Icon";
 import {
   ApiError,
-  FeasibilityResponse,
-  FriendshipDiagnostics,
   MappingGuessResponse,
-  PreviewResponse,
-  ValidationResponse,
+  StudentRecord,
   applyMapping,
-  getFeasibility,
-  getFriendshipDiagnostics,
+  clearSession,
   getMappingGuess,
   getPreview,
-  getValidation,
-  importManualEntry,
+  getStudents,
   loadWorkbook,
   updateManualEntry,
 } from "@/lib/api";
-import { FLAGS_CHANGED_EVENT, getFlags, getSummaries, resetFlags, setFlag, setSummary } from "@/lib/steps";
+import { ensureDataReady } from "@/lib/bootstrap";
+import { resetFlags, setFlag } from "@/lib/steps";
 
-type Section = "load" | "mapping" | "checks";
+const DEFAULT_FILE_NAME = "רשימה כללית לאיזונית.xlsx";
+const LEVEL_LETTER: Record<string, string> = { "מצטיינת": "מ", "בינונית": "ב", "חלשה": "ח" };
+
+type CatKey = "inclusion" | "hamar" | "ethiopian_origin" | "differential";
+const FILTERS: { key: CatKey; cls: string; label: string }[] = [
+  { key: "inclusion", cls: "incl", label: "שילוב" },
+  { key: "hamar", cls: "hamar", label: 'ח"מ' },
+  { key: "ethiopian_origin", cls: "eth", label: "מוצא אתיופי" },
+  { key: "differential", cls: "diff", label: "דיפרנציאלית" },
+];
+
+function fullName(s: StudentRecord) {
+  return `${(s.first_name ?? "").toString().trim()} ${(s.last_name ?? "").toString().trim()}`.trim() || `#${s.student_id}`;
+}
 
 export default function DataStep() {
-  const [open, setOpen] = useState<Section>(() => {
-    const f = getFlags();
-    if (!f.loaded) return "load";
-    if (!f.mapped) return "mapping";
-    return "checks";
-  });
-  const [summaries, setSummaries] = useState<Record<string, string>>({});
-  const [flags, setFlagsState] = useState(getFlags());
-
-  useEffect(() => {
-    const refresh = () => {
-      setSummaries(getSummaries());
-      setFlagsState(getFlags());
-    };
-    refresh();
-    window.addEventListener(FLAGS_CHANGED_EVENT, refresh);
-    return () => window.removeEventListener(FLAGS_CHANGED_EVENT, refresh);
-  }, []);
-
-  function complete(section: Section, summary: string, next?: Section) {
-    setSummary(section, summary);
-    if (next) setOpen(next);
-  }
-
-  return (
-    <div className="flex flex-col divide-y divide-slate-100">
-      <AccordionSection
-        index={1}
-        title="טעינת קובץ"
-        summary={summaries.load}
-        done={flags.loaded}
-        open={open === "load"}
-        onToggle={() => setOpen("load")}
-      >
-        <LoadSection onDone={(s) => complete("load", s, "mapping")} />
-      </AccordionSection>
-
-      <AccordionSection
-        index={2}
-        title="מיפוי עמודות"
-        summary={summaries.mapping}
-        done={flags.mapped}
-        disabled={!flags.loaded}
-        open={open === "mapping"}
-        onToggle={() => flags.loaded && setOpen("mapping")}
-      >
-        {open === "mapping" && <MappingSection onDone={(s) => complete("mapping", s, "checks")} />}
-      </AccordionSection>
-
-      <AccordionSection
-        index={3}
-        title="בדיקת תקינות והיתכנות"
-        summary={summaries.checks}
-        done={Boolean(summaries.checks)}
-        disabled={!flags.mapped}
-        open={open === "checks"}
-        onToggle={() => flags.mapped && setOpen("checks")}
-      >
-        {open === "checks" && <ChecksSection onDone={(s) => complete("checks", s)} />}
-      </AccordionSection>
-    </div>
-  );
-}
-
-function LoadSection({ onDone }: { onDone: (summary: string) => void }) {
-  const [useDefault, setUseDefault] = useState(true);
-  const [file, setFile] = useState<File | undefined>(undefined);
-  const [headerRow, setHeaderRow] = useState(4);
-  const [firstDataRow, setFirstDataRow] = useState(5);
-  const [lastDataRow, setLastDataRow] = useState(221);
-  const [loading, setLoading] = useState(false);
-  const [preview, setPreview] = useState<PreviewResponse | null>(null);
-
-  async function handleLoad() {
-    setLoading(true);
-    try {
-      const res = await loadWorkbook({ useDefault, headerRow, firstDataRow, lastDataRow, file });
-      resetFlags();
-      setFlag("loaded", true);
-      const p = await getPreview();
-      setPreview(p);
-      const summary = `${res.row_count} שורות · גיליון '${res.active_sheet}'`;
-      toast.success(`נטען בהצלחה: ${summary}`);
-      onDone(summary);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "שגיאה בטעינת הקובץ");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const rowInput = "w-16 rounded border border-slate-300 px-1.5 py-1 text-sm text-slate-800 tabular-nums";
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={useDefault} onChange={(e) => setUseDefault(e.target.checked)} />
-          קובץ ברירת המחדל
-        </label>
-
-        {!useDefault && <input type="file" accept=".xlsx" onChange={(e) => setFile(e.target.files?.[0])} className="text-sm" />}
-
-        <div className="flex items-center gap-3 text-xs text-slate-500">
-          <label className="flex items-center gap-1.5">
-            כותרות
-            <input type="number" min={1} value={headerRow} onChange={(e) => setHeaderRow(Number(e.target.value))} className={rowInput} />
-          </label>
-          <label className="flex items-center gap-1.5">
-            משורה
-            <input type="number" min={1} value={firstDataRow} onChange={(e) => setFirstDataRow(Number(e.target.value))} className={rowInput} />
-          </label>
-          <label className="flex items-center gap-1.5">
-            עד שורה
-            <input type="number" min={0} value={lastDataRow} onChange={(e) => setLastDataRow(Number(e.target.value))} className={rowInput} />
-          </label>
-        </div>
-
-        <Button disabled={loading} onClick={handleLoad}>
-          {loading ? "טוען..." : "טען קובץ"}
-        </Button>
-      </div>
-
-      {preview && (
-        <details className="flex flex-col gap-2">
-          <summary className="cursor-pointer text-sm text-slate-500">
-            תצוגה מקדימה · {preview.total_rows} שורות, {preview.columns.length} עמודות
-          </summary>
-          <div className="mt-3">
-            <SimpleTable columns={preview.columns} rows={preview.rows} />
-          </div>
-        </details>
-      )}
-    </div>
-  );
-}
-
-const MANUAL_SENTINEL = "__manual__";
-
-function MappingSection({ onDone }: { onDone: (summary: string) => void }) {
+  const [booting, setBooting] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [cleared, setCleared] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [srcOpen, setSrcOpen] = useState(false);
+  const [students, setStudents] = useState<StudentRecord[]>([]);
   const [guess, setGuess] = useState<MappingGuessResponse | null>(null);
-  const [mapping, setMapping] = useState<Record<string, string | null>>({});
-  const [manualFields, setManualFields] = useState<Set<string>>(new Set());
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [applying, setApplying] = useState(false);
-  const [applied, setApplied] = useState<{ student_count: number; manual_fields_needed: string[] } | null>(null);
-  const [manualRows, setManualRows] = useState<Record<string, unknown>[]>([]);
+  const [source, setSource] = useState<{ rows: number; sheet: string }>({ rows: 0, sheet: "" });
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<CatKey | null>(null);
+  const [headerRow, setHeaderRow] = useState(4);
+  const [firstRow, setFirstRow] = useState(5);
+  const [lastRow, setLastRow] = useState(221);
 
+  const fileInput = useRef<HTMLInputElement>(null);
+  const dragCount = useRef(0);
+  const studentsRef = useRef(students);
   useEffect(() => {
-    getMappingGuess()
-      .then((g) => {
-        setGuess(g);
-        setMapping(g.mapping);
-        setManualFields(new Set(g.manual_fields));
-      })
-      .catch((e) => setError(e instanceof ApiError ? e.message : "שגיאה"))
-      .finally(() => setLoading(false));
-  }, []);
+    studentsRef.current = students;
+  }, [students]);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  function updateField(field: string, value: string) {
-    if (value === MANUAL_SENTINEL) {
-      setManualFields((prev) => new Set(prev).add(field));
-      setMapping((prev) => ({ ...prev, [field]: null }));
-    } else {
-      setManualFields((prev) => {
-        const next = new Set(prev);
-        next.delete(field);
-        return next;
-      });
-      setMapping((prev) => ({ ...prev, [field]: value }));
+  async function loadEverything(ready: () => Promise<unknown> = ensureDataReady) {
+    await ready().catch(() => {});
+    const [g, p] = await Promise.all([getMappingGuess(), getPreview()]);
+    setGuess(g);
+    setSource({ rows: p.total_rows, sheet: p.sheet_names[0] ?? "" });
+    try {
+      const st = await getStudents();
+      setStudents(st.rows);
+    } catch {
+      setStudents([]);
     }
   }
 
-  async function handleApply() {
-    if (!guess) return;
-    setApplying(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        await loadEverything();
+      } catch (e) {
+        setError(e instanceof ApiError ? e.message : "שגיאה בטעינת הנתונים.");
+      } finally {
+        setBooting(false);
+      }
+    })();
+    return () => clearTimeout(saveTimer.current);
+  }, []);
+
+  // Close the source popover on Escape while it is open.
+  useEffect(() => {
+    if (!srcOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSrcOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [srcOpen]);
+
+  function scheduleSave() {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      setSaveState("saving");
+      try {
+        const rows = studentsRef.current.map((s) => ({
+          student_id: s.student_id,
+          differential: !!s.differential,
+          inclusion: !!s.inclusion,
+          hamar: !!s.hamar,
+          friend_requests_raw: (s.friend_requests_raw as string) ?? "",
+        }));
+        await updateManualEntry(rows);
+        setSaveState("saved");
+      } catch (e) {
+        setSaveState("idle");
+        toast.error(e instanceof ApiError ? e.message : "שגיאה בשמירה");
+      }
+    }, 700);
+  }
+
+  function patch(id: number, key: "inclusion" | "hamar" | "differential" | "friend_requests_raw", value: boolean | string) {
+    setStudents((prev) => prev.map((s) => (s.student_id === id ? { ...s, [key]: value } : s)));
+    scheduleSave();
+  }
+
+  async function handleLoad(opts: { file?: File }) {
+    setSrcOpen(false);
+    setBooting(true);
     try {
-      const res = await applyMapping(mapping, Array.from(manualFields));
-      setApplied(res);
-      setManualRows(res.manual_entry);
+      await loadWorkbook({ useDefault: !opts.file, headerRow, firstDataRow: firstRow, lastDataRow: lastRow, file: opts.file });
+      setFlag("loaded", true);
+      const g = await getMappingGuess();
+      await applyMapping(g.mapping, g.manual_fields);
       setFlag("mapped", true);
-      const summary = `${res.student_count} תלמידות`;
-      toast.success(`נבנתה טבלה עם ${summary}`);
-      if (res.manual_fields_needed.length === 0) onDone(summary);
+      await loadEverything(async () => {});
+      setCleared(false);
+      toast.success("הקובץ נטען");
     } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : "שגיאה בהחלת המיפוי");
+      toast.error(e instanceof ApiError ? e.message : "שגיאה בטעינת הקובץ");
     } finally {
-      setApplying(false);
+      setBooting(false);
     }
   }
 
-  async function handleManualCellChange(rowIdx: number, key: string, value: string | boolean) {
-    setManualRows((prev) => prev.map((r, i) => (i === rowIdx ? { ...r, [key]: value } : r)));
-  }
-
-  async function handleSaveManual() {
+  async function handleClear() {
+    setSrcOpen(false);
     try {
-      const res = await updateManualEntry(manualRows);
-      setManualRows(res.manual_entry);
-      toast.success("הוחלו הנתונים הידניים על טבלת התלמידות");
-      onDone(`${res.student_count} תלמידות · כולל שדות ידניים`);
+      await clearSession();
+      resetFlags();
+      setStudents([]);
+      setGuess(null);
+      setSource({ rows: 0, sheet: "" });
+      setSaveState("idle");
+      setCleared(true);
+      toast.success("הקובץ הוסר. גררו או בחרו קובץ חדש.");
     } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : "שגיאה");
+      toast.error(e instanceof ApiError ? e.message : "שגיאה במחיקת הקובץ");
     }
   }
 
-  async function handleImport(file: File) {
-    try {
-      const res = await importManualEntry(file);
-      setManualRows(res.rows);
-      toast.success("טבלת ההזנה הידנית עודכנה מהקובץ שיובא");
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : "שגיאה בייבוא");
+  function onDropFile(file: File) {
+    if (!/\.xlsx$/i.test(file.name)) {
+      toast.error("יש לבחור קובץ .xlsx");
+      return;
     }
+    handleLoad({ file });
   }
 
-  if (loading) return <Skeleton className="h-48 w-full" />;
-  if (error) return <ErrorBanner message={error} />;
-  if (!guess) return null;
+  const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  const dragProps = {
+    onDragEnter: (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragCount.current++;
+      setDragging(true);
+    },
+    onDragOver: (e: DragEvent) => {
+      if (hasFiles(e)) e.preventDefault();
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragCount.current--;
+      if (dragCount.current <= 0) {
+        dragCount.current = 0;
+        setDragging(false);
+      }
+    },
+    onDrop: (e: DragEvent) => {
+      e.preventDefault();
+      dragCount.current = 0;
+      setDragging(false);
+      const f = e.dataTransfer?.files?.[0];
+      if (f) onDropFile(f);
+    },
+  };
 
-  const problems = computeProblems(guess, mapping, manualFields);
+  const tallies = useMemo(() => {
+    const c = { inclusion: 0, hamar: 0, ethiopian_origin: 0, differential: 0 };
+    for (const s of students) {
+      if (s.inclusion) c.inclusion++;
+      if (s.hamar) c.hamar++;
+      if (s.ethiopian_origin) c.ethiopian_origin++;
+      if (s.differential) c.differential++;
+    }
+    return c;
+  }, [students]);
+
+  const visible = useMemo(() => {
+    const q = query.trim();
+    return students.filter((s) => {
+      if (filter && !s[filter]) return false;
+      if (q && !fullName(s).includes(q)) return false;
+      return true;
+    });
+  }, [students, query, filter]);
+
+  // Trust signal: how many of the detected fields the importer mapped on its own.
+  const detectedCount = useMemo(() => {
+    if (!guess) return 0;
+    return [...guess.required_fields, ...guess.optional_fields].filter(
+      (f) => guess.mapping[f] && !guess.manual_fields.includes(f)
+    ).length;
+  }, [guess]);
+
+  if (error) return <EmptyState title="שגיאה" description={error} />;
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-x-10 gap-y-0.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-        {guess.required_fields.map((f) => (
-          <FieldSelect
-            key={f}
-            label={guess.labels[f] ?? f}
-            value={manualFields.has(f) ? MANUAL_SENTINEL : mapping[f] ?? MANUAL_SENTINEL}
-            columns={guess.columns}
-            onChange={(v) => updateField(f, v)}
-          />
-        ))}
-      </div>
-
-      <details>
-        <summary className="cursor-pointer text-sm text-slate-500">
-          שדות אופציונליים ({guess.optional_fields.length})
-        </summary>
-        <div className="mt-3 grid grid-cols-1 gap-x-10 gap-y-0.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-          {guess.optional_fields.map((f) => (
-            <FieldSelect
-              key={f}
-              label={guess.labels[f] ?? f}
-              value={manualFields.has(f) ? MANUAL_SENTINEL : mapping[f] ?? MANUAL_SENTINEL}
-              columns={guess.columns}
-              onChange={(v) => updateField(f, v)}
-            />
-          ))}
-        </div>
-      </details>
-
-      {problems.length > 0 ? problems.map((p, i) => <ErrorBanner key={i} message={p} />) : <InfoBanner tone="success" message="המיפוי תקין." />}
-
-      <div>
-        <Button disabled={applying || problems.length > 0} onClick={handleApply}>
-          {applying ? "מעבד..." : "בנה טבלת תלמידות"}
-        </Button>
-      </div>
-
-      {applied && applied.manual_fields_needed.length > 0 && (
-        <div className="flex flex-col gap-3 border-t border-slate-100 pt-4">
-          <p className="text-sm text-slate-500">
-            שדות שדורשים הזנה ידנית: {applied.manual_fields_needed.map((f) => guess.labels[f] ?? f).join(", ")}
-          </p>
-          <label className="text-sm text-slate-500">
-            ייבוא טבלה משלימה (CSV/Excel, לפי מזהה תלמידה)
-            <input type="file" accept=".csv,.xlsx" className="mt-1 block text-sm" onChange={(e) => e.target.files?.[0] && handleImport(e.target.files[0])} />
-          </label>
-          <ManualEditor rows={manualRows} onChange={handleManualCellChange} />
-          <div>
-            <Button variant="secondary" onClick={handleSaveManual}>
-              החל שדות ידניים
-            </Button>
+    <div className="cw" {...dragProps}>
+      {dragging && (
+        <div className="dp-drag-overlay">
+          <div className="box">
+            <Icon name="upload" size={32} />
+            שחררו כדי לטעון את הקובץ
           </div>
         </div>
       )}
-    </div>
-  );
-}
+      <input
+        ref={fileInput}
+        type="file"
+        accept=".xlsx"
+        hidden
+        onChange={(e) => {
+          if (e.target.files?.[0]) onDropFile(e.target.files[0]);
+          e.target.value = "";
+        }}
+      />
 
-function computeProblems(guess: MappingGuessResponse, mapping: Record<string, string | null>, manualFields: Set<string>) {
-  const problems: string[] = [];
-  for (const f of guess.required_fields) {
-    if (f === "ethiopian_origin") continue;
-    const col = mapping[f];
-    if (!col && !manualFields.has(f)) problems.push(`השדה '${guess.labels[f] ?? f}' לא מופה.`);
-  }
-  return problems;
-}
+      {booting ? (
+        <DataPageSkeleton />
+      ) : cleared ? (
+        <div className={clsx("dp-dropzone", dragging && "active")} style={{ maxWidth: 540, margin: "56px auto" }}>
+          <Icon name="file" size={30} className="dp-dz-icon" />
+          <h3>לא טעון קובץ</h3>
+          <p>גררו לכאן קובץ אקסל (.xlsx) או בחרו קובץ מהמחשב</p>
+          <div className="dp-drop-actions">
+            <Button onClick={() => fileInput.current?.click()}>בחירת קובץ</Button>
+            <Button variant="secondary" onClick={() => handleLoad({})}>טעינת קובץ ברירת המחדל</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="dp">
+          {/* header: title · source pill (with popover) · primary CTA */}
+          <div className="dp-head">
+            <div className="dp-title">
+              <h1>רשימת התלמידות</h1>
+              <span className="dp-count cw-num">{students.length} תלמידות</span>
+            </div>
+            <div className="dp-spacer" />
 
-// The backend already guesses the mapping, so the common case is "confirm
-// what's there" — not "pick from a list". Shows the resolved column as plain
-// text and only turns into a type-ahead field when the user chooses to change
-// it, which keeps a screen of ~15 fields readable instead of a wall of selects.
-function FieldSelect({ label, value, columns, onChange }: { label: string; value: string; columns: string[]; onChange: (v: string) => void }) {
-  const listId = useId();
-  const [editing, setEditing] = useState(false);
-  const isManual = value === MANUAL_SENTINEL;
+            <div className="dp-src-wrap">
+              <button
+                type="button"
+                className="dp-src"
+                aria-expanded={srcOpen}
+                aria-haspopup="dialog"
+                onClick={() => setSrcOpen((o) => !o)}
+              >
+                <span className="ico" aria-hidden>XLS</span>
+                <span className="txt">
+                  <span className="n">{DEFAULT_FILE_NAME}</span>
+                  <span className="m">
+                    <span className="d" aria-hidden />
+                    {source.rows} שורות · {detectedCount} עמודות זוהו
+                  </span>
+                </span>
+                <Icon name="chevron" size={15} className="chev" />
+              </button>
 
-  if (editing) {
-    return (
-      <div className="flex items-center gap-2 py-1 text-sm">
-        <span className="w-32 shrink-0 truncate text-slate-500">{label}</span>
-        <input
-          autoFocus
-          list={listId}
-          defaultValue={isManual ? "" : value}
-          placeholder="הקלידו שם עמודה"
-          onChange={(e) => {
-            if (columns.includes(e.target.value)) {
-              onChange(e.target.value);
-              setEditing(false);
-            }
-          }}
-          onBlur={() => setEditing(false)}
-          className="min-w-0 flex-1 border-b border-teal-600 bg-transparent px-1 py-0.5 focus:outline-none"
-        />
-        <datalist id={listId}>
-          {columns.map((c) => (
-            <option key={c} value={c} />
-          ))}
-        </datalist>
-        <button
-          onMouseDown={(e) => {
-            e.preventDefault();
-            onChange(MANUAL_SENTINEL);
-            setEditing(false);
-          }}
-          className="shrink-0 text-xs text-slate-400 hover:text-slate-700"
-        >
-          ידני
-        </button>
-      </div>
-    );
-  }
+              {srcOpen && (
+                <>
+                  <div className="dp-pop-scrim" onClick={() => setSrcOpen(false)} aria-hidden />
+                  <div className="dp-pop" role="dialog" aria-label="קובץ המקור והתאמת עמודות">
+                    <div className="dp-pop-sec">
+                      <h3>קובץ המקור</h3>
+                      <div className="sub">כל העיבוד נעשה על עותק — הקובץ המקורי אינו משתנה.</div>
+                      <div className="dp-file">
+                        <div className="ico" aria-hidden>XLS</div>
+                        <div>
+                          <div className="f-name">{DEFAULT_FILE_NAME}</div>
+                          <div className="f-meta"><span className="d" aria-hidden />{source.rows} שורות · גיליון {source.sheet || "—"} · נטען</div>
+                        </div>
+                      </div>
+                      <div className="dp-row-actions">
+                        <button className="dp-link" onClick={() => fileInput.current?.click()}>החלפת קובץ</button>
+                        <button className="dp-link dp-link-danger" onClick={handleClear}>מחיקת הקובץ</button>
+                      </div>
+                      <details className="dp-adv">
+                        <summary>הגדרות טעינה מתקדמות</summary>
+                        <div className="dp-adv-grid">
+                          <label>שורת כותרות<input className="cw-num" type="number" value={headerRow} onChange={(e) => setHeaderRow(+e.target.value)} /></label>
+                          <label>משורה<input className="cw-num" type="number" value={firstRow} onChange={(e) => setFirstRow(+e.target.value)} /></label>
+                          <label>עד שורה<input className="cw-num" type="number" value={lastRow} onChange={(e) => setLastRow(+e.target.value)} /></label>
+                        </div>
+                        <button className="dp-link" style={{ marginTop: 10 }} onClick={() => handleLoad({})}>טעינה מחדש עם הגדרות אלו</button>
+                      </details>
+                    </div>
 
-  return (
-    <button
-      onClick={() => setEditing(true)}
-      className="flex w-full items-baseline gap-2 py-1 text-start text-sm hover:bg-slate-50"
-      aria-label={`${label}: ${isManual ? "הזנה ידנית" : value}. לחצו לשינוי`}
-    >
-      <span className="w-32 shrink-0 truncate text-slate-500">{label}</span>
-      <span
-        className={clsx(
-          "min-w-0 flex-1 truncate border-b border-dashed border-slate-200",
-          isManual ? "text-amber-700" : "text-slate-800"
-        )}
-      >
-        {isManual ? "הזנה ידנית" : value}
-      </span>
-    </button>
-  );
-}
+                    <div className="dp-pop-sec">
+                      <h3>התאמת עמודות</h3>
+                      <div className="sub">זוהו אוטומטית מתוך הקובץ. השדות הידניים מוזנים ברשימה.</div>
+                      <div>
+                        {guess &&
+                          [...guess.required_fields, ...guess.optional_fields].map((f) => {
+                            const col = guess.mapping[f];
+                            const manual = guess.manual_fields.includes(f) || !col;
+                            return (
+                              <div key={f} className="dp-map-row">
+                                <span className="dp-map-field">{guess.labels[f] ?? f}</span>
+                                {manual ? (
+                                  <span className="dp-badge-manual">מוזן ברשימה</span>
+                                ) : (
+                                  <span className="dp-map-col"><span className="ok" aria-hidden>✓</span>{col}</span>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
 
-function ManualEditor({ rows, onChange }: { rows: Record<string, unknown>[]; onChange: (rowIdx: number, key: string, value: string | boolean) => void }) {
-  if (rows.length === 0) return <p className="text-sm text-slate-400">אין שורות</p>;
-  const cols = Object.keys(rows[0]);
-  return (
-    <div className="max-h-96 overflow-auto">
-      <table className="w-full text-right text-sm">
-        <thead className="sticky top-0 bg-white">
-          <tr>
-            {cols.map((c) => (
-              <th key={c} className="border-b border-slate-200 px-2 py-1.5 font-medium text-slate-500">
-                {c}
-              </th>
+            <Link href="/steps/configure">
+              <Button>המשך להגדרות שיבוץ ←</Button>
+            </Link>
+          </div>
+
+          {/* the few figures that matter */}
+          <div className="dp-stats">
+            <div className="dp-figure">
+              <span className="lab">סה״כ תלמידות</span>
+              <span className="val">{students.length}</span>
+            </div>
+            {FILTERS.map((f) => (
+              <div key={f.key} className="dp-figure">
+                <span className="lab"><span className="d" style={{ background: `var(--cw-${f.cls})` }} aria-hidden />{f.label}</span>
+                <span className="val">{tallies[f.key]}</span>
+              </div>
             ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {rows.map((row, i) => (
-            <tr key={i}>
-              {cols.map((c) => (
-                <td key={c} className="px-2 py-1">
-                  {typeof row[c] === "boolean" ? (
-                    <input type="checkbox" checked={row[c] as boolean} onChange={(e) => onChange(i, c, e.target.checked)} />
-                  ) : (
-                    <input
-                      type="text"
-                      value={(row[c] as string) ?? ""}
-                      onChange={(e) => onChange(i, c, e.target.value)}
-                      className="w-full min-w-[6rem] rounded border border-transparent bg-transparent px-1 py-0.5 hover:border-slate-300 focus:border-teal-500 focus:outline-none"
-                    />
+            <span className="dp-legend">הישגים: מ=מצטיינת · ב=בינונית · ח=חלשה</span>
+          </div>
+
+          {/* one table surface */}
+          <section className="dp-panel">
+            <div className="dp-toolbar">
+              <label className="dp-search">
+                <Icon name="search" size={15} style={{ color: "var(--cw-ink-3)" }} />
+                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="חיפוש לפי שם" aria-label="חיפוש לפי שם" />
+              </label>
+              <div className="cw-filters" role="group" aria-label="סינון לפי קטגוריה">
+                <button className="cw-fchip" aria-pressed={filter === null} onClick={() => setFilter(null)}>הכל</button>
+                {FILTERS.map((f) => (
+                  <button key={f.key} className="cw-fchip" aria-pressed={filter === f.key} onClick={() => setFilter((p) => (p === f.key ? null : f.key))}>
+                    <span className="sw" style={{ background: `var(--cw-${f.cls})` }} aria-hidden />{f.label}
+                  </button>
+                ))}
+              </div>
+              <span className="dp-save" aria-live="polite" style={saveState === "saved" ? { color: "var(--cw-good)" } : undefined}>
+                {saveState === "saving" ? "שומר…" : saveState === "saved" ? "✓ נשמר" : ""}
+              </span>
+            </div>
+
+            <div className="dp-table-scroll">
+              <table className="dp-table">
+                <thead>
+                  <tr className="dp-grp">
+                    <th colSpan={6}>פרטי התלמידה · מהקובץ</th>
+                    <th colSpan={4} className="manual edcol edstart">הזנה ידנית · מלאו כאן</th>
+                  </tr>
+                  <tr className="dp-cols">
+                    <th className="c-num">#</th>
+                    <th>שם מלא</th>
+                    <th>בי&quot;ס נוכחי</th>
+                    <th className="center">כיתה</th>
+                    <th>מוצא</th>
+                    <th className="center">הישגים</th>
+                    <th className="center edcol edstart">שילוב</th>
+                    <th className="center edcol">ח&quot;מ</th>
+                    <th className="center edcol">דיפרנציאלית</th>
+                    <th className="edcol">בקשות חברות</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((s) => {
+                    const level = String(s.academic_level ?? "");
+                    const cls = s.current_class;
+                    return (
+                      <tr key={s.student_id}>
+                        <td className="c-num">{s.student_id}</td>
+                        <td className="c-name">{fullName(s)}</td>
+                        <td>{s.current_school ?? <span className="dp-muted">—</span>}</td>
+                        <td className="center cw-num">{cls == null || cls === "" ? <span className="dp-muted">—</span> : String(cls)}</td>
+                        <td>{s.ethiopian_origin ? <span className="dp-origin"><span className="d" aria-hidden />אתיופי</span> : <span className="dp-muted">—</span>}</td>
+                        <td className="center"><span className="dp-lvl" title={level}>{LEVEL_LETTER[level] ?? "·"}</span></td>
+                        <td className="center edcol edstart"><input type="checkbox" aria-label={`שילוב — ${fullName(s)}`} checked={!!s.inclusion} onChange={(e) => patch(s.student_id, "inclusion", e.target.checked)} /></td>
+                        <td className="center edcol"><input type="checkbox" aria-label={`ח"מ — ${fullName(s)}`} checked={!!s.hamar} onChange={(e) => patch(s.student_id, "hamar", e.target.checked)} /></td>
+                        <td className="center edcol"><input type="checkbox" aria-label={`דיפרנציאלית — ${fullName(s)}`} checked={!!s.differential} onChange={(e) => patch(s.student_id, "differential", e.target.checked)} /></td>
+                        <td className="edcol"><input className="dp-friends" aria-label={`בקשות חברות — ${fullName(s)}`} value={(s.friend_requests_raw as string) ?? ""} placeholder="שמות, מופרד בפסיקים" onChange={(e) => patch(s.student_id, "friend_requests_raw", e.target.value)} /></td>
+                      </tr>
+                    );
+                  })}
+                  {visible.length === 0 && (
+                    <tr><td colSpan={10} className="center dp-muted" style={{ padding: "28px" }}>לא נמצאה תלמידה תואמת</td></tr>
                   )}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// Validation, friendship-name matching and constraint feasibility are all
-// read-only reports that run automatically — they were three separate steps
-// but require no user input, so they read better as one status page.
-function ChecksSection({ onDone }: { onDone: (summary: string) => void }) {
-  const [validation, setValidation] = useState<ValidationResponse | null>(null);
-  const [friendship, setFriendship] = useState<FriendshipDiagnostics | null>(null);
-  const [feasibility, setFeasibility] = useState<FeasibilityResponse | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    Promise.all([getValidation(), getFriendshipDiagnostics(), getFeasibility()])
-      .then(([v, f, fe]) => {
-        setValidation(v);
-        setFriendship(f);
-        setFeasibility(fe);
-        setFlag("validated", !v.has_errors);
-        const parts = [v.has_errors ? `${v.error_count} שגיאות חוסמות` : "ללא שגיאות חוסמות"];
-        if (!fe.all_feasible) parts.push("אילוצים לא ישימים");
-        onDone(parts.join(" · "));
-      })
-      .catch((e) => setError(e instanceof ApiError ? e.message : "שגיאה"))
-      .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  if (loading) return <Skeleton className="h-48 w-full" />;
-  if (error) return <ErrorBanner message={error} />;
-  if (!validation || !friendship || !feasibility) return null;
-
-  return (
-    <div className="flex flex-col gap-4">
-      {/* Headline status */}
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-        <StatusIndicator
-          status={validation.has_errors ? "blocking" : "valid"}
-          text={validation.has_errors ? `${validation.error_count} שגיאות חוסמות` : "נתונים תקינים"}
-        />
-        <StatusIndicator
-          status={feasibility.all_feasible ? "valid" : "warning"}
-          text={feasibility.all_feasible ? "כל האילוצים ישימים" : "חלק מהאילוצים אינם ישימים"}
-        />
-        <StatusIndicator
-          status={friendship.unmatched_count + friendship.ambiguous_count === 0 ? "valid" : "warning"}
-          text={`${friendship.matched_count} בקשות חברות זוהו`}
-        />
-      </div>
-
-      {/* Composition */}
-      <div className="flex flex-wrap gap-x-6 gap-y-3">
-        <StatTile label='סה"כ תלמידות' value={feasibility.total_students} />
-        <StatTile label="מוצא אתיופי" value={feasibility.ethiopian_count} />
-        <StatTile label="דיפרנציאליות" value={feasibility.differential_count} />
-        <StatTile label="שילוב" value={feasibility.inclusion_count} />
-        <StatTile label='ח"מ' value={feasibility.hamar_count} />
-      </div>
-
-      {!feasibility.all_feasible && (
-        <InfoBanner tone="warning" message="ניתן להפוך אילוצים לא ישימים לאילוצים מועדפים בשלב כללי השיבוץ." />
-      )}
-
-      {validation.issues.length > 0 && (
-        <details open={validation.has_errors}>
-          <summary className="cursor-pointer text-sm text-slate-500">ממצאי אימות ({validation.issues.length})</summary>
-          <div className="mt-3">
-            <SimpleTable columns={["קטגוריה", "חומרה", "הודעה", "תלמידות"]} rows={validation.issues} />
-          </div>
-        </details>
-      )}
-
-      {!feasibility.all_feasible && (
-        <details>
-          <summary className="cursor-pointer text-sm text-slate-500">פירוט היתכנות אילוצים</summary>
-          <div className="mt-3">
-            <SimpleTable columns={["חוק", "אפשרי", "הסבר"]} rows={feasibility.findings} />
-          </div>
-        </details>
-      )}
-
-      {friendship.unmatched_rows.length > 0 && (
-        <details>
-          <summary className="cursor-pointer text-sm text-slate-500">
-            בקשות חברות שלא זוהו ({friendship.unmatched_count} לא מותאמים, {friendship.ambiguous_count} דו-משמעיים)
-          </summary>
-          <div className="mt-3">
-            <SimpleTable columns={Object.keys(friendship.unmatched_rows[0])} rows={friendship.unmatched_rows} />
-          </div>
-        </details>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );

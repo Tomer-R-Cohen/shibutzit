@@ -3,13 +3,22 @@ export interface StepDef {
   index: number;
   title: string;
   subtitle: string;
+  // The flag whose truth marks this step "complete" in the top stepper.
+  doneFlag?: keyof WizardFlags;
 }
 
+// The product is a single linear workflow with exactly three primary
+// destinations: upload the roster → configure the rules → generate & review the
+// assignment. Everything else (data preview, column mapping, validation,
+// feasibility, violations, manual moves, versions, export) lives *inside* one of
+// these three screens — never as its own nav item.
 export const STEPS: StepDef[] = [
-  { slug: "data", index: 1, title: "נתונים ותלמידות", subtitle: "טעינת קובץ, מיפוי עמודות, אימות והיתכנות" },
-  { slug: "configure", index: 2, title: "כללי שיבוץ", subtitle: "אילוצים, יעדים חברתיים ונעילות" },
-  { slug: "assign", index: 3, title: "הפקת שיבוץ ותוצאות", subtitle: "הרצה, תוצאות, עריכה ידנית וייצוא" },
+  { slug: "data", index: 1, title: "העלאת נתונים", subtitle: "טעינת קובץ, בדיקת הנתונים והתאמת עמודות", doneFlag: "mapped" },
+  { slug: "configure", index: 2, title: "הגדרות שיבוץ", subtitle: "כללים, יעדים חברתיים ונעילות" },
+  { slug: "assign", index: 3, title: "תוצאות", subtitle: "הפקת שיבוץ, בדיקה, תיקונים וייצוא", doneFlag: "optimized" },
 ];
+
+export const NAV_STEPS: StepDef[] = STEPS;
 
 export type WizardFlags = {
   loaded: boolean;
@@ -86,19 +95,6 @@ export function resetFlags() {
   window.localStorage.removeItem(SUMMARY_KEY);
 }
 
-// Which top-level phases are reachable given current flags.
-export function isStepReachable(slug: string, flags: WizardFlags): boolean {
-  switch (slug) {
-    case "data":
-      return true;
-    case "configure":
-    case "assign":
-      return flags.mapped;
-    default:
-      return false;
-  }
-}
-
 // Short one-line summaries shown for collapsed/completed accordion
 // sections (e.g. "נטען בהצלחה: 214 שורות") so users don't need to
 // re-expand a finished section just to confirm what happened.
@@ -116,6 +112,9 @@ export function getSummaries(): Record<string, string> {
 
 export function setSummary(section: string, text: string) {
   const summaries = getSummaries();
+  // Skip redundant writes: rewriting the same value would still dispatch the
+  // change event, which can bounce back through listeners into a render loop.
+  if (summaries[section] === text) return;
   summaries[section] = text;
   window.localStorage.setItem(SUMMARY_KEY, JSON.stringify(summaries));
   window.dispatchEvent(new Event(FLAGS_CHANGED_EVENT));

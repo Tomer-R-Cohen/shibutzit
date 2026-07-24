@@ -21,7 +21,8 @@ export default function RootLayout({
   return (
     <html dir="rtl" lang="he" className={`${rubik.variable} h-full antialiased`}>
       <body
-        className="min-h-full bg-slate-50 font-sans text-slate-900 dark:bg-slate-950 dark:text-slate-100"
+        className="min-h-full font-sans"
+        style={{ background: "var(--cw-ground)", color: "var(--cw-ink)" }}
         suppressHydrationWarning
       >
         {children}

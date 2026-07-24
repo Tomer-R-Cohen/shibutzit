@@ -5,7 +5,17 @@ __pycache__/
 *.log
 sample_data/_uploaded_tmp.xlsx
 
+# Persisted per-session state (contains real student data)
+backend/.sessions/
+
 # Real student data - never version-controlled
 רשימה כללית לאיזונית.xlsx
 סריקה.5.pdf
 sample_data/reference_scan.png
+
+# Local tooling — installed Claude skills, not part of the product
+.claude/
+awesome-ux-skills/
+
+# Stray screenshots / scratch images at repo root
+/image.png

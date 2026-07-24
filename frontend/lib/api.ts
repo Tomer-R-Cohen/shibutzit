@@ -69,6 +69,11 @@ export function ensureSession() {
   return request("/api/session", { method: "POST" });
 }
 
+// Clears the current session's loaded data + persisted state (keeps the id).
+export function clearSession() {
+  return request("/api/session", { method: "POST" });
+}
+
 // ---- Step 1: load ----
 export interface LoadWorkbookResponse {
   row_count: number;
@@ -129,7 +134,24 @@ export function applyMapping(mapping: Record<string, string | null>, manualField
   );
 }
 export function getManualEntry() {
-  return request<{ rows: Record<string, unknown>[] }>("/api/mapping/manual-entry");
+  return request<{ rows: Record<string, unknown>[]; names: Record<string, string> }>("/api/mapping/manual-entry");
+}
+export interface StudentRecord {
+  student_id: number;
+  first_name?: string;
+  last_name?: string;
+  current_school?: string;
+  current_class?: number | string | null;
+  ethiopian_origin?: boolean;
+  academic_level?: string;
+  differential?: boolean;
+  inclusion?: boolean;
+  hamar?: boolean;
+  friend_requests_raw?: string;
+  [key: string]: unknown;
+}
+export function getStudents() {
+  return request<{ rows: StudentRecord[]; count: number }>("/api/students");
 }
 export function updateManualEntry(rows: Record<string, unknown>[]) {
   return request<{ student_count: number; manual_entry: Record<string, unknown>[] }>("/api/mapping/manual-entry", {
