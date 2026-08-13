@@ -203,41 +203,72 @@ export function getFeasibility() {
   return request<FeasibilityResponse>("/api/feasibility");
 }
 
-// ---- Step 6: config ----
-export interface SolverConfig {
+// ---- Step 6: run parameters ----
+// Every actual rule (including the built-in defaults) lives in the
+// constraint list below -- this is just num_classes / time limit / seed.
+export interface RunConfig {
   num_classes: number;
-  class_size_hard: boolean;
-  differential_hard: boolean;
-  ethiopian_hard: boolean;
-  inclusion_hard: boolean;
-  hamar_hard: boolean;
-  locked_hard: boolean;
-  max_class_size_diff: number;
-  max_differential_per_class: number;
-  min_ethiopian_per_class: number;
-  max_ethiopian_per_class: number;
-  min_inclusion_per_class: number;
-  max_inclusion_per_class: number;
-  min_hamar_per_class: number;
-  max_hamar_per_class: number;
+  denominator_all_students: boolean;
   mutual_target_pct: number;
   two_friends_target_pct: number;
-  denominator_all_students: boolean;
-  weight_mutual: number;
-  weight_two_friends: number;
-  weight_academic_balance: number;
-  weight_school_balance: number;
-  weight_current_class_balance: number;
-  weight_category_balance: number;
-  weight_target_distribution: number;
   time_limit_seconds: number;
   random_seed: number;
 }
-export function getConfig() {
-  return request<SolverConfig>("/api/config");
+export function getRunConfig() {
+  return request<RunConfig>("/api/run-config");
 }
-export function setConfig(cfg: SolverConfig) {
-  return request<SolverConfig>("/api/config", { method: "POST", body: JSON.stringify(cfg) });
+export function setRunConfig(cfg: RunConfig) {
+  return request<RunConfig>("/api/run-config", { method: "POST", body: JSON.stringify(cfg) });
+}
+
+// ---- Constraints (built-in rules + chat/manual exceptions, unified) ----
+export type ConstraintType = "capacity" | "separate" | "together" | "at_least_one_of" | "balance" | "locked" | "friendship_objective";
+export type ConstraintSource = "builtin_default" | "chat" | "manual";
+export interface ConstraintModel {
+  id: string;
+  type: ConstraintType;
+  hard: boolean;
+  args: Record<string, unknown>;
+  label_hebrew: string;
+  source: ConstraintSource;
+  active: boolean;
+}
+export function getConstraints() {
+  return request<{ constraints: ConstraintModel[] }>("/api/constraints");
+}
+export function patchConstraint(id: string, changes: { hard?: boolean; active?: boolean }) {
+  return request<ConstraintModel>(`/api/constraints/${id}`, { method: "PATCH", body: JSON.stringify(changes) });
+}
+export function deleteConstraint(id: string) {
+  return request<{ removed: boolean }>(`/api/constraints/${id}`, { method: "DELETE" });
+}
+
+// ---- Chat ----
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+export interface PendingProposal {
+  kind: "propose" | "modify" | "remove";
+  summary_hebrew: string;
+  constraint?: ConstraintModel | null;
+  target_constraint_id?: string | null;
+  changes?: Record<string, unknown> | null;
+}
+export function getChatHistory() {
+  return request<{ messages: ChatMessage[]; pending_proposal: PendingProposal | null }>("/api/chat/history");
+}
+export function sendChatMessage(message: string) {
+  return request<{ reply: string; pending_proposal: PendingProposal | null }>("/api/chat/message", {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+}
+export function confirmChatProposal() {
+  return request<{ applied: boolean; result: unknown }>("/api/chat/confirm", { method: "POST" });
+}
+export function rejectChatProposal() {
+  return request<{ rejected: boolean }>("/api/chat/reject", { method: "POST" });
 }
 
 // ---- Step 7: locking ----
@@ -255,14 +286,40 @@ export interface OptimizeResponse {
   wall_time_seconds: number;
   objective_value: number | null;
   infeasibility_notes: string[];
+  conflicting_constraint_ids?: string[];
+  infeasibility_explanation?: string | null;
+  // On an infeasible solve the backend stages a concrete way out (soften
+  // one conflicting hard rule) as a normal pending proposal, so confirming
+  // it runs through the same path as a chat-proposed change.
+  relaxation_proposal?: PendingProposal | null;
+  // Short LLM read of a successful result; null when no LLM is configured.
+  result_comment?: string | null;
 }
 export function runOptimize() {
   return request<OptimizeResponse>("/api/optimize", { method: "POST" });
 }
 
 // ---- Step 9: results ----
+// Mirrors class_overview_table() (src/metrics.py) field-for-field -- keys
+// are the real Hebrew column names the backend returns, not translated.
+export interface ClassOverviewRow {
+  "כיתה": number;
+  "גודל": number;
+  "ציון לימודי ממוצע": number;
+  "התפלגות הישגים": Record<string, number>;
+  "דיפרנציאליות": number;
+  "מוצא אתיופי": number;
+  "שילוב": number;
+  'ח"מ': number;
+  'התפלגות ביה"ס': Record<string, number>;
+  "התפלגות כיתה נוכחית": Record<string, number>;
+  "אחוז חברות הדדית": number | null;
+  "אחוז 2+ חברות": number | null;
+  "חריגות": number;
+  "ציון איכות": number;
+}
 export function getResultsOverview() {
-  return request<{ rows: Record<string, unknown>[] }>("/api/results/overview");
+  return request<{ rows: ClassOverviewRow[] }>("/api/results/overview");
 }
 export function getResultsStudents() {
   return request<{ rows: Record<string, unknown>[] }>("/api/results/students");

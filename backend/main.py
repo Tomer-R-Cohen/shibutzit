@@ -8,7 +8,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import config, export, optimize, validation, workbook
+from .routers import chat, config, export, optimize, validation, workbook
 from .session_store import store
 
 app = FastAPI(title="שיבוץ תלמידות - API")
@@ -38,3 +38,4 @@ app.include_router(validation.router)
 app.include_router(config.router)
 app.include_router(optimize.router)
 app.include_router(export.router)
+app.include_router(chat.router)

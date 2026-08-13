@@ -19,10 +19,12 @@ from src.column_mapping import (
     build_empty_manual_frame,
     guess_mapping,
 )
+from src.constraints import Constraint, capacity_range_label_hebrew
 from src.excel_loader import DEFAULT_WORKBOOK_PATH, ExcelLoadError, load_workbook
 
 from ..schemas import LoadWorkbookRequest, MappingSetRequest
 from ..session_store import store
+from ..solver_inputs import ensure_defaults_seeded, sync_class_size_bounds
 from ..utils import df_records, require
 
 router = APIRouter()
@@ -35,18 +37,24 @@ router = APIRouter()
 # lower a minimum, never raise it, so a user's own settings for categories that
 # do exist are left untouched.
 _MIN_FIELDS = [
-    (FIELD_INCLUSION, "min_inclusion_per_class", "שילוב"),
-    (FIELD_HAMAR, "min_hamar_per_class", 'ח"מ'),
-    (FIELD_ETHIOPIAN_ORIGIN, "min_ethiopian_per_class", "מוצא אתיופי"),
+    (FIELD_INCLUSION, "שילוב"),
+    (FIELD_HAMAR, 'ח"מ'),
+    (FIELD_ETHIOPIAN_ORIGIN, "מוצא אתיופי"),
 ]
 
 
-def clamp_zero_minimums(cfg, df) -> list[str]:
+def clamp_zero_minimums(constraints: list[Constraint], df) -> list[str]:
     adjusted: list[str] = []
-    for field, attr, label in _MIN_FIELDS:
-        if field in df.columns and int(df[field].sum()) == 0 and getattr(cfg, attr, 0) > 0:
-            setattr(cfg, attr, 0)
-            adjusted.append(label)
+    for field_name, label in _MIN_FIELDS:
+        if field_name not in df.columns or int(df[field_name].sum()) != 0:
+            continue
+        for c in constraints:
+            group = c.args.get("group", {})
+            if c.type == "capacity" and group.get("kind") == "field" and group.get("field") == field_name:
+                if (c.args.get("min") or 0) > 0:
+                    c.args["min"] = 0
+                    c.label_hebrew = capacity_range_label_hebrew(field_name, 0, c.args.get("max"))
+                    adjusted.append(label)
     return adjusted
 
 
@@ -154,7 +162,9 @@ async def apply_mapping_endpoint(req: MappingSetRequest, x_session_id: str = Hea
 
     sess.mapped_df = mapped
     manual_needed = [f for f in OPTIONAL_MANUAL_FIELDS if f in cm.manual_fields]
-    adjusted = clamp_zero_minimums(sess.solver_config, mapped)
+    ensure_defaults_seeded(sess, mapped)
+    sync_class_size_bounds(sess, mapped)
+    adjusted = clamp_zero_minimums(sess.constraints, mapped)
     store.save(sess)
 
     return {
@@ -209,7 +219,8 @@ async def update_manual_entry(payload: dict, x_session_id: str = Header(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     sess.mapped_df = mapped
-    clamp_zero_minimums(sess.solver_config, mapped)
+    ensure_defaults_seeded(sess, mapped)
+    clamp_zero_minimums(sess.constraints, mapped)
     store.save(sess)
     return {"student_count": len(mapped), "manual_entry": df_records(new_df)}
 

@@ -4,10 +4,10 @@ from fastapi import APIRouter, Header
 
 from src.feasibility import analyze_feasibility
 from src.friendship_graph import resolve_requests, unmatched_report
-from src.optimizer import SolverConfig
 from src.validation import validate_students
 
 from ..session_store import store
+from ..solver_inputs import build_solver_inputs
 from ..utils import df_records, require
 
 router = APIRouter()
@@ -47,8 +47,8 @@ async def get_friendship_diagnostics(x_session_id: str = Header(...)):
 async def get_feasibility(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     df = require(sess.mapped_df, "יש להשלים שלבים קודמים תחילה.")
-    cfg = sess.solver_config or SolverConfig()
-    report = analyze_feasibility(df, cfg)
+    cfg, constraints = build_solver_inputs(sess)
+    report = analyze_feasibility(df, constraints, cfg.num_classes)
     sess.feasibility_report = report
     from src.column_mapping import (
         FIELD_CURRENT_CLASS,
