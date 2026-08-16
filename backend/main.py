@@ -8,6 +8,10 @@ from __future__ import annotations
 import logging
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()  # loads .env from the repo root (or CWD) into process env vars
+
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
