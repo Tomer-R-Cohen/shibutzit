@@ -19,7 +19,8 @@ from src.column_mapping import (
     FIELD_LAST_NAME,
     FIELD_STUDENT_ID,
 )
-from src.optimizer import SolverConfig, _academic_score
+from src.constraints import Constraint, resolve_group_members
+from src.optimizer import _academic_score
 
 
 @dataclass
@@ -62,12 +63,6 @@ def student_assignment_table(
         has_mutual = len(mutual_same_class) >= 1
         has_two = satisfied_count >= 2
 
-        warnings = []
-        if row.get(FIELD_DIFFERENTIAL) and row.get(FIELD_INCLUSION):
-            pass
-        if not requested and (FIELD_STUDENT_ID in df.columns):
-            pass
-
         rows.append(
             {
                 "מזהה": sid,
@@ -88,21 +83,49 @@ def student_assignment_table(
                 "לפחות חברה הדדית אחת": has_mutual,
                 "לפחות 2 חברות מבוקשות": has_two,
                 "נעולה": sid in locked,
-                "אזהרות": "; ".join(warnings),
+                "אזהרות": "",
             }
         )
     return pd.DataFrame(rows)
+
+
+def _active_hard_capacity_constraints(constraints: list[Constraint]) -> list[Constraint]:
+    return [c for c in constraints if c.active and c.hard and c.type == "capacity"]
+
+
+def _capacity_violations_per_class(
+    df: pd.DataFrame,
+    assignment: dict[int, int],
+    constraints: list[Constraint],
+    num_classes: int,
+) -> list[int]:
+    """Count, per class, how many active hard capacity constraints it breaks."""
+    class_members = [
+        {sid for sid, cls in assignment.items() if cls == c} for c in range(num_classes)
+    ]
+    counts = [0] * num_classes
+    for con in _active_hard_capacity_constraints(constraints):
+        group_members = set(resolve_group_members(df, con.args["group"]))
+        lo = con.args.get("min")
+        hi = con.args.get("max")
+        for c in range(num_classes):
+            n_in_class = len(group_members & class_members[c])
+            if (lo is not None and n_in_class < lo) or (hi is not None and n_in_class > hi):
+                counts[c] += 1
+    return counts
 
 
 def class_overview_table(
     df: pd.DataFrame,
     assignment: dict[int, int],
     friendship_matched: dict[int, list[int]],
-    config: SolverConfig,
+    constraints: list[Constraint],
+    num_classes: int,
 ) -> pd.DataFrame:
     """Build the per-class overview table required by the spec."""
+    violations_per_class = _capacity_violations_per_class(df, assignment, constraints, num_classes)
     rows = []
-    for c in range(config.num_classes):
+    for c in range(num_classes):
         members = [sid for sid, cls in assignment.items() if cls == c]
         sub = df[df[FIELD_STUDENT_ID].isin(members)]
         size = len(sub)
@@ -130,16 +153,7 @@ def class_overview_table(
             if len(same) >= 2:
                 two_ok += 1
 
-        violations = 0
-        if config.ethiopian_hard and not (config.min_ethiopian_per_class <= eth_count <= config.max_ethiopian_per_class):
-            violations += 1
-        if config.inclusion_hard and not (config.min_inclusion_per_class <= inc_count <= config.max_inclusion_per_class):
-            violations += 1
-        if config.hamar_hard and not (config.min_hamar_per_class <= hamar_count <= config.max_hamar_per_class):
-            violations += 1
-        if config.differential_hard and diff_count > config.max_differential_per_class:
-            violations += 1
-
+        violations = violations_per_class[c]
         quality_score = max(0.0, 100.0 - violations * 15.0)
         if with_requests:
             quality_score = quality_score * 0.5 + 50.0 * (mutual_ok / with_requests)
@@ -169,15 +183,17 @@ def compute_global_metrics(
     df: pd.DataFrame,
     assignment: dict[int, int],
     friendship_matched: dict[int, list[int]],
-    config: SolverConfig,
+    constraints: list[Constraint],
+    num_classes: int,
+    denominator_all_students: bool = True,
     solver_status: str = "",
     solver_wall_time: float = 0.0,
     objective_value: Optional[float] = None,
 ) -> GlobalMetrics:
     """Compute the global metrics summary required by the spec."""
-    class_sizes = [0] * config.num_classes
+    class_sizes = [0] * num_classes
     for cls in assignment.values():
-        if 0 <= cls < config.num_classes:
+        if 0 <= cls < num_classes:
             class_sizes[cls] += 1
 
     satisfied = partial = unsatisfied = 0
@@ -188,7 +204,7 @@ def compute_global_metrics(
         sid = row[FIELD_STUDENT_ID]
         requested = [r for r in friendship_matched.get(sid, []) if r != sid]
         has_requests = len(requested) > 0
-        if config.denominator_all_students or has_requests:
+        if denominator_all_students or has_requests:
             denom_students += 1
         if not has_requests:
             continue
@@ -209,12 +225,12 @@ def compute_global_metrics(
     mutual_pct = 100.0 * mutual_hits / denom_students if denom_students else 0.0
     two_pct = 100.0 * two_hits / denom_students if denom_students else 0.0
 
-    class_overview = class_overview_table(df, assignment, friendship_matched, config)
+    class_overview = class_overview_table(df, assignment, friendship_matched, constraints, num_classes)
     violations_count = int(class_overview["חריגות"].sum()) if not class_overview.empty else 0
 
     return GlobalMetrics(
         total_students=len(df),
-        num_classes=config.num_classes,
+        num_classes=num_classes,
         class_sizes=class_sizes,
         class_size_min=min(class_sizes) if class_sizes else 0,
         class_size_max=max(class_sizes) if class_sizes else 0,
@@ -234,57 +250,35 @@ def compute_global_metrics(
 def violations_report(
     df: pd.DataFrame,
     assignment: dict[int, int],
-    config: SolverConfig,
+    constraints: list[Constraint],
+    num_classes: int,
 ) -> pd.DataFrame:
-    """Build the violations & exceptions report required by the spec."""
+    """Build the violations & exceptions report: one row per (class, active
+    hard capacity constraint) pair currently out of bounds."""
+    class_members = [
+        {sid for sid, cls in assignment.items() if cls == c} for c in range(num_classes)
+    ]
     rows = []
-    for c in range(config.num_classes):
-        members = [sid for sid, cls in assignment.items() if cls == c]
-        sub = df[df[FIELD_STUDENT_ID].isin(members)]
-        size = len(sub)
-        eth = int(sub[FIELD_ETHIOPIAN_ORIGIN].sum()) if size else 0
-        inc = int(sub[FIELD_INCLUSION].sum()) if size else 0
-        hamar = int(sub[FIELD_HAMAR].sum()) if size else 0
-        diff = int(sub[FIELD_DIFFERENTIAL].sum()) if size else 0
-
-        def add_row(rule, expected, actual, severity, hard):
+    for con in _active_hard_capacity_constraints(constraints):
+        group_members = set(resolve_group_members(df, con.args["group"]))
+        lo = con.args.get("min")
+        hi = con.args.get("max")
+        expected = f"{lo if lo is not None else 0}-{hi if hi is not None else '∞'}"
+        for c in range(num_classes):
+            actual = len(group_members & class_members[c])
+            violated = (lo is not None and actual < lo) or (hi is not None and actual > hi)
+            if not violated:
+                continue
             rows.append(
                 {
-                    "כלל": rule,
+                    "כלל": con.label_hebrew,
                     "כיתה": c + 1,
                     "צפוי": expected,
                     "בפועל": actual,
-                    "חומרה": severity,
-                    "קשה/רכה": "קשה" if hard else "רכה",
-                    "תיקון מוצע": "העברת תלמידה מתאימה לכיתה אחרת" if actual != expected else "",
+                    "חומרה": "גבוהה",
+                    "קשה/רכה": "קשה",
+                    "תיקון מוצע": "העברת תלמידה מתאימה לכיתה אחרת",
                 }
             )
-
-        if not (config.min_ethiopian_per_class <= eth <= config.max_ethiopian_per_class):
-            add_row(
-                "מוצא אתיופי לכיתה",
-                f"{config.min_ethiopian_per_class}-{config.max_ethiopian_per_class}",
-                eth,
-                "גבוהה",
-                config.ethiopian_hard,
-            )
-        if not (config.min_inclusion_per_class <= inc <= config.max_inclusion_per_class):
-            add_row(
-                "שילוב לכיתה",
-                f"{config.min_inclusion_per_class}-{config.max_inclusion_per_class}",
-                inc,
-                "גבוהה",
-                config.inclusion_hard,
-            )
-        if not (config.min_hamar_per_class <= hamar <= config.max_hamar_per_class):
-            add_row(
-                'ח"מ לכיתה',
-                f"{config.min_hamar_per_class}-{config.max_hamar_per_class}",
-                hamar,
-                "בינונית",
-                config.hamar_hard,
-            )
-        if diff > config.max_differential_per_class:
-            add_row("דיפרנציאלית לכיתה", f"<= {config.max_differential_per_class}", diff, "גבוהה", config.differential_hard)
 
     return pd.DataFrame(rows)

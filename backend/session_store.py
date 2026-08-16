@@ -19,17 +19,33 @@ import os
 import pickle
 import threading
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import pandas as pd
 
 from src.column_mapping import ColumnMapping
+from src.constraints import Constraint
 from src.excel_loader import LoadedWorkbook
 from src.friendship_graph import NameResolutionResult
 from src.manual_adjustments import AdjustmentState
 from src.optimizer import OptimizationResult, SolverConfig
 
+from .llm.tokenization import TokenMap
+
 PERSIST_DIR = os.path.join(os.path.dirname(__file__), ".sessions")
+
+
+@dataclass
+class PendingProposal:
+    """A chat-derived change awaiting explicit counselor confirmation
+    before it touches `Session.constraints`. Exactly one at a time per
+    session -- a new chat message replaces whatever was pending."""
+
+    kind: Literal["propose", "modify", "remove"]
+    summary_hebrew: str
+    constraint: Optional[dict] = None  # kind == "propose": the built Constraint, as a plain dict
+    target_constraint_id: Optional[str] = None  # kind in ("modify", "remove")
+    changes: Optional[dict] = None  # kind == "modify": {"hard": bool} and/or {"active": bool}
 
 
 def _safe_name(session_id: str) -> str:
@@ -51,10 +67,17 @@ class Session:
     unmatched_df: Optional[pd.DataFrame] = None
     target_distribution_df: Optional[pd.DataFrame] = None
     feasibility_report: Any = None
-    solver_config: SolverConfig = field(default_factory=SolverConfig)
+    # Run parameters only (num_classes, time limit, seed, ...) -- every
+    # actual rule (including the built-in defaults) lives in `constraints`
+    # below, seeded once via backend/solver_inputs.ensure_defaults_seeded.
+    run_config: SolverConfig = field(default_factory=SolverConfig)
     locked_assignment: dict = field(default_factory=dict)
     opt_result: Optional[OptimizationResult] = None
     adjustment_state: Optional[AdjustmentState] = None
+    constraints: list[Constraint] = field(default_factory=list)
+    chat_history: list[dict] = field(default_factory=list)
+    pending_proposal: Optional[PendingProposal] = None
+    token_map: TokenMap = field(default_factory=TokenMap)
 
 
 class SessionStore:
@@ -98,7 +121,7 @@ class SessionStore:
         the file stays readable across code changes."""
         cm = sess.col_mapping
         payload = {
-            "solver_config": asdict(sess.solver_config) if sess.solver_config else None,
+            "run_config": asdict(sess.run_config) if sess.run_config else None,
             "locked_assignment": sess.locked_assignment,
             "manual_entry": sess.manual_entry_df,
             "col_mapping": (
@@ -106,6 +129,13 @@ class SessionStore:
                 if cm is not None
                 else None
             ),
+            "constraints": [asdict(c) for c in sess.constraints],
+            "chat_history": sess.chat_history,
+            "pending_proposal": asdict(sess.pending_proposal) if sess.pending_proposal else None,
+            "token_map": {
+                "id_to_token": sess.token_map.id_to_token,
+                "token_to_id": sess.token_map.token_to_id,
+            },
         }
         try:
             with self._lock:
@@ -127,10 +157,10 @@ class SessionStore:
         except Exception:
             return
 
-        sc = payload.get("solver_config")
-        if sc:
+        rc = payload.get("run_config")
+        if rc:
             try:
-                sess.solver_config = SolverConfig(**sc)
+                sess.run_config = SolverConfig(**rc)
             except Exception:
                 pass
 
@@ -155,6 +185,31 @@ class SessionStore:
                 sess.col_mapping = cm
             except Exception:
                 pass
+
+        raw_constraints = payload.get("constraints")
+        if raw_constraints:
+            try:
+                sess.constraints = [Constraint(**c) for c in raw_constraints]
+            except Exception:
+                pass
+
+        chat_history = payload.get("chat_history")
+        if chat_history:
+            sess.chat_history = chat_history
+
+        pp = payload.get("pending_proposal")
+        if pp:
+            try:
+                sess.pending_proposal = PendingProposal(**pp)
+            except Exception:
+                pass
+
+        tm = payload.get("token_map")
+        if tm:
+            sess.token_map = TokenMap(
+                id_to_token=tm.get("id_to_token", {}),
+                token_to_id=tm.get("token_to_id", {}),
+            )
 
 
 store = SessionStore()

@@ -89,6 +89,389 @@ body {
 .cfg-feas a { color: inherit; text-decoration: underline; font-weight: 600; }
 
 /* ============================================================
+   Workspace shell (agent workspace) -- conversation as the primary
+   surface, a contextual inspector beside it, structured artifacts instead
+   of chat bubbles for anything that's an action rather than talk.
+   ============================================================ */
+/* height (not min-height): the shell is a hard viewport-height cap so its
+   flex children's min-height:0/overflow chains actually constrain scroll to
+   the conversation pane -- without this, long content grows the whole page
+   and the browser scrolls topbar/inspector/conversation together instead of
+   just the conversation panel internally. */
+.ws-shell { height: 100vh; display: flex; flex-direction: column; background: var(--cw-ground); color: var(--cw-ink); }
+.ws-topbar { display: flex; align-items: center; gap: 20px; padding: 0 24px; height: 56px; background: var(--cw-panel); border-bottom: 1px solid var(--cw-line); flex: none; }
+.ws-topbar-counts { display: flex; align-items: center; gap: 16px; font-size: 12.5px; color: var(--cw-ink-3); }
+.ws-topbar-spacer { flex: 1 1 auto; }
+.ws-topbar-result { display: flex; align-items: center; gap: 12px; }
+.ws-topbar-result-ok { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; color: var(--cw-good); }
+
+.ws-main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-rows: minmax(0, 1fr); }
+@media (max-width: 900px) { .ws-main { grid-template-columns: 1fr; } }
+
+.ws-conversation { position: relative; display: flex; flex-direction: column; min-height: 0; border-inline-end: 1px solid var(--cw-line); background: var(--cw-ground); isolation: isolate; }
+.ws-timeline-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.ws-timeline-content { display: flex; flex-direction: column; min-height: 100%; gap: 12px; padding: 20px 24px; }
+.ws-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--cw-ink-3); font-size: 13px; text-align: center; }
+.ws-empty p { margin: 0; max-width: 32ch; }
+
+/* floating "back to latest" button -- only shown once scrolled away from
+   the bottom (use-stick-to-bottom's isAtBottom), sits just above the
+   composer. */
+.ws-scroll-bottom { position: absolute; bottom: 78px; left: 50%; transform: translateX(-50%); z-index: 5; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--cw-card); border: 1px solid var(--cw-line); color: var(--cw-ink-2); box-shadow: var(--cw-shadow-hover); cursor: pointer; transition: background-color 120ms ease, border-color 120ms ease; animation: ws-in 150ms ease-out; }
+.ws-scroll-bottom:hover { background: var(--cw-panel); border-color: var(--cw-ink-3); }
+.ws-scroll-bottom:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 2px; }
+
+.ws-avatar { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--cw-navy); color: #fff; display: grid; place-items: center; }
+
+@keyframes ws-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* asymmetric by design: the user's own words get a filled bubble (something
+   they said, contained); the assistant's response sits directly on the
+   white canvas like prose, not inside a card -- the artifacts that follow
+   it already carry the visual weight, so the text itself doesn't need to. */
+.ws-bubble { max-width: min(80%, 640px); display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; line-height: 1.6; animation: ws-in 200ms ease-out; }
+.ws-bubble-text { white-space: pre-wrap; }
+.ws-bubble.user { align-self: flex-end; background: var(--cw-accent-tint); color: var(--cw-ink); padding: 9px 14px; border-radius: 16px; border-end-end-radius: 4px; }
+.ws-bubble.assistant { align-self: flex-start; color: var(--cw-ink); padding: 2px 0; }
+
+.ws-dots { display: inline-flex; align-items: center; gap: 4px; padding: 2px 1px; }
+.ws-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--cw-ink-3); animation: ws-dot 1.1s ease-in-out infinite; }
+.ws-dots span:nth-child(2) { animation-delay: 0.15s; }
+.ws-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes ws-dot { 0%, 60%, 100% { opacity: 0.35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+
+/* proposals: a structured action, not a bubble */
+.ws-proposal { align-self: center; max-width: 860px; width: 100%; background: color-mix(in srgb, var(--cw-accent) 5%, var(--cw-card)); border: 1px solid var(--cw-accent); border-radius: 12px; padding: 15px 17px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--cw-shadow-card); animation: ws-in 220ms ease-out; }
+.ws-proposal-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--cw-accent-strong); text-transform: uppercase; letter-spacing: 0.03em; }
+.ws-proposal-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+.ws-proposal-chip { font-size: 11px; font-weight: 600; color: var(--cw-ink-2); background: var(--cw-panel); border: 1px solid var(--cw-line); border-radius: 5px; padding: 2px 8px; }
+.ws-proposal-text { font-size: 13.5px; color: var(--cw-ink); line-height: 1.5; margin: 0; }
+.ws-proposal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* generic artifacts: dataset ready, solve result/failure, warnings -- these
+   are the "large structured object" tier, deliberately a step heavier than
+   a message bubble (bigger radius, real padding, elevation) so the three
+   timeline tiers (message / activity event / artifact) read as distinct
+   categories at a glance rather than uniform boxes. */
+.ws-artifact { align-self: center; max-width: 860px; width: 100%; border-radius: 16px; padding: 18px 20px; display: flex; flex-direction: column; gap: 11px; font-size: 13.5px; border: 1px solid var(--cw-line); background: var(--cw-card); box-shadow: var(--cw-shadow-card); animation: ws-in 240ms ease-out; }
+.ws-artifact-head { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; color: var(--cw-ink); }
+.ws-artifact-stats { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--cw-ink-2); }
+.ws-artifact-note { color: var(--cw-ink-2); margin: 0; line-height: 1.55; font-size: 13.5px; }
+.ws-artifact-list { margin: 0; padding-inline-start: 18px; display: flex; flex-direction: column; gap: 3px; color: var(--cw-ink-2); font-size: 12.5px; }
+.ws-artifact-actions { display: flex; gap: 8px; }
+.ws-artifact-ok { border-color: color-mix(in srgb, var(--cw-good) 32%, var(--cw-line)); }
+.ws-artifact-ok .ws-artifact-head { color: var(--cw-good); }
+.ws-artifact-warn { border-color: color-mix(in srgb, var(--cw-warn) 32%, var(--cw-line)); }
+.ws-artifact-warn .ws-artifact-head { color: var(--cw-warn); }
+.ws-artifact-crit { border-color: color-mix(in srgb, var(--cw-crit) 34%, var(--cw-line)); }
+.ws-artifact-crit .ws-artifact-head { color: var(--cw-crit); }
+.ws-artifact-done { flex-direction: row; align-items: center; gap: 7px; padding: 8px 14px; font-size: 12.5px; color: var(--cw-good); background: transparent; border: none; align-self: flex-start; width: auto; max-width: none; margin-inline: 0; }
+.ws-artifact-muted { flex-direction: row; align-items: center; gap: 7px; padding: 8px 14px; font-size: 12.5px; color: var(--cw-ink-3); background: transparent; border: none; align-self: flex-start; width: auto; max-width: none; margin-inline: 0; }
+.ws-artifact-progress { flex-direction: row; align-items: center; gap: 9px; color: var(--cw-ink-2); }
+
+.ws-spinner { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--cw-line); border-top-color: var(--cw-accent); animation: ws-spin 700ms linear infinite; flex: none; }
+@keyframes ws-spin { to { transform: rotate(360deg); } }
+
+/* solver phase text -- each line fades up as it replaces the previous one */
+@keyframes ws-phase-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+.ws-phase-text { animation: ws-phase-in 260ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .ws-phase-text { animation: none; } }
+
+.ws-link { font-size: 12.5px; font-weight: 600; color: var(--cw-accent-strong); background: none; border: 0; padding: 0; cursor: pointer; align-self: flex-start; }
+.ws-link:hover { text-decoration: underline; }
+.ws-link:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 2px; border-radius: 2px; }
+
+/* collapsed/expanded artifact body -- grid-rows trick animates to auto
+   height without JS measuring the content. `visibility` is switched with a
+   delay equal to the collapse duration so the content stays paintable
+   while folding away, then leaves the tab order entirely: clipped-but-
+   focusable content is a keyboard trap, not a hidden region. */
+.ws-expandable { display: flex; flex-direction: column; gap: 8px; }
+.ws-expandable-body { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows 220ms cubic-bezier(0.4, 0, 0.2, 1), visibility 0s linear 220ms; }
+.ws-expandable-body.open { grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows 220ms cubic-bezier(0.4, 0, 0.2, 1), visibility 0s; }
+.ws-expandable-body-inner { overflow: hidden; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.ws-expandable-toggle { display: inline-flex; align-items: center; gap: 5px; align-self: flex-start; font-size: 12px; font-weight: 600; color: var(--cw-accent-strong); background: none; border: 0; padding: 2px 0; cursor: pointer; transition: opacity 120ms ease; }
+.ws-expandable-toggle:hover { text-decoration: underline; }
+.ws-expandable-toggle:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 2px; border-radius: 3px; }
+.ws-expandable-chevron { transition: transform 150ms ease; }
+.ws-expandable-chevron.open { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .ws-expandable-body, .ws-expandable-chevron { transition: none; } }
+
+/* a bounded range drawn as a bar: min ─────── max */
+.ws-rangebar { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.ws-rangebar-num { font-size: 12px; font-weight: 700; color: var(--cw-ink); font-variant-numeric: tabular-nums; flex: none; }
+.ws-rangebar-track { flex: 1; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--cw-accent) 55%, var(--cw-line-2)); }
+
+/* ---- shared tactility vocabulary: every clickable row lifts 1px on
+   hover, presses to 0.99 on active, and reveals its disclosure chevron
+   only on hover/focus rather than parking one permanently in every row.
+   The per-row rules below all follow this; `.ws-chev` is the shared
+   fade-in affordance. ---- */
+.ws-chev { color: var(--cw-ink-3); flex: none; opacity: 0; transition: opacity 130ms ease-out; }
+
+/* clickable per-constraint row inside a solve-failure breakdown -- opens
+   that constraint's own inspector. */
+.ws-conflict-row { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: start; padding: 10px 12px; border-radius: 10px; background: var(--cw-panel); border: 0; cursor: pointer; font-family: inherit; transition: background-color 130ms ease-out, transform 130ms ease-out, box-shadow 130ms ease-out; }
+.ws-conflict-row:hover { background: color-mix(in srgb, var(--cw-crit) 5%, var(--cw-panel)); transform: translateY(-1px); }
+.ws-conflict-row:active { transform: scale(0.99); }
+.ws-conflict-row:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 1px; }
+.ws-conflict-row.is-highlighted { background: color-mix(in srgb, var(--cw-crit) 7%, var(--cw-panel)); box-shadow: inset 2px 0 0 var(--cw-crit); }
+.ws-conflict-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ws-conflict-row-type { font-size: 11px; font-weight: 700; color: var(--cw-crit); text-transform: uppercase; letter-spacing: 0.03em; }
+.ws-conflict-row-chevron { color: var(--cw-ink-3); transform: rotate(-90deg); flex: none; opacity: 0; transition: opacity 130ms ease-out; }
+.ws-conflict-row:hover .ws-conflict-row-chevron, .ws-conflict-row:focus-visible .ws-conflict-row-chevron { opacity: 1; }
+.ws-conflict-row-label { font-size: 13px; color: var(--cw-ink); }
+@media (prefers-reduced-motion: reduce) { .ws-conflict-row, .ws-conflict-row:hover, .ws-conflict-row:active { transform: none; } }
+
+/* ---- the signature motif: a value sitting on a track (━━━●━━). Same
+   geometry everywhere a balance figure appears. ---- */
+.ws-track { position: relative; flex: 1; height: 6px; border-radius: 3px; background: var(--cw-line-2); display: block; }
+.ws-track-fill { position: absolute; inset-block: 0; inset-inline-start: 0; border-radius: 3px; background: color-mix(in srgb, var(--cw-accent) 45%, var(--cw-line-2)); transition: width 400ms ease-out; }
+.ws-track-dot { position: absolute; top: 50%; width: 9px; height: 9px; border-radius: 50%; background: var(--cw-accent); border: 2px solid var(--cw-card); transform: translate(50%, -50%); transition: inset-inline-start 400ms ease-out, background-color 130ms ease-out, box-shadow 130ms ease-out; }
+.ws-track.emphasised .ws-track-fill { background: color-mix(in srgb, var(--cw-accent) 70%, var(--cw-line-2)); }
+.ws-track.emphasised .ws-track-dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--cw-accent) 18%, transparent); }
+@media (prefers-reduced-motion: reduce) { .ws-track-fill, .ws-track-dot { transition: none; } }
+
+/* solve-result: headline metrics (count-up), per-class balance rows,
+   attention items -- the "is this good?" summary, not the 217-card board. */
+.ws-metrics-row { display: flex; gap: 36px; padding: 6px 0 4px; }
+.ws-metric { display: flex; flex-direction: column; gap: 4px; }
+.ws-metric-value { font-size: 28px; font-weight: 600; color: var(--cw-ink); font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -0.02em; }
+.ws-metric-value.tone-good { color: var(--cw-good); }
+.ws-metric-value.tone-crit { color: var(--cw-crit); }
+.ws-metric-label { font-size: 12px; color: var(--cw-ink-3); }
+/* a number that just changed marks itself briefly -- state change, not a
+   refresh. Colour only, no movement, so it reads as a note rather than a
+   distraction. */
+@keyframes ws-metric-changed { 0% { color: var(--cw-accent); } 100% { color: inherit; } }
+.ws-metric-changed { animation: ws-metric-changed 900ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .ws-metric-changed { animation: none; } }
+
+@keyframes ws-row-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.ws-class-bars { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; }
+.ws-class-bar-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; font-size: 13px; padding: 7px 9px; border-radius: 9px;
+  background: none; border: 0; cursor: pointer; font-family: inherit; text-align: start;
+  animation: ws-row-in 260ms ease-out backwards;
+  transition: background-color 130ms ease-out, transform 130ms ease-out, opacity 130ms ease-out;
+}
+.ws-class-bar-row:hover { background: var(--cw-panel); transform: translateY(-1px); }
+.ws-class-bar-row:active { transform: scale(0.99); }
+.ws-class-bar-row:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 1px; }
+.ws-class-bar-row.is-highlighted { background: var(--cw-accent-tint); }
+.ws-class-bar-row.is-dimmed { opacity: 0.45; }
+.ws-class-bar-name { flex: none; width: 32px; color: var(--cw-ink); font-weight: 600; }
+.ws-class-bar-size { flex: none; width: 26px; color: var(--cw-ink-3); font-size: 11.5px; }
+.ws-class-bar-value { flex: none; width: 26px; text-align: end; font-weight: 600; color: var(--cw-ink); font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) {
+  .ws-class-bar-row { animation: none; }
+  .ws-class-bar-row:hover, .ws-class-bar-row:active { transform: none; }
+}
+
+.ws-attention { display: flex; flex-direction: column; gap: 1px; padding-top: 8px; }
+.ws-attention-title { font-size: 12px; font-weight: 600; color: var(--cw-ink-3); padding: 2px 9px 5px; }
+.ws-attention-item { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 9px; font-size: 13px; color: var(--cw-ink-2); background: none; border: 0; text-align: start; cursor: pointer; font-family: inherit; transition: background-color 130ms ease-out, transform 130ms ease-out, color 130ms ease-out; }
+.ws-attention-item:hover { background: var(--cw-panel); color: var(--cw-ink); transform: translateY(-1px); }
+.ws-attention-item:active { transform: scale(0.99); }
+.ws-attention-item:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 1px; }
+.ws-attention-item-arrow { color: var(--cw-warn); flex: none; opacity: 0.7; transition: opacity 130ms ease-out, transform 130ms ease-out; }
+.ws-attention-item:hover .ws-attention-item-arrow { opacity: 1; transform: translate(-1px, -1px); }
+.ws-attention-item-text { flex: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .ws-attention-item:hover, .ws-attention-item:active { transform: none; }
+  .ws-attention-item:hover .ws-attention-item-arrow { transform: none; }
+}
+
+/* compact proportional dot distribution -- academic level breakdown on the
+   dataset artifact. Dot count is scaled to share-of-total, not literal. */
+.ws-dataset-levels { display: flex; flex-direction: column; align-self: flex-start; gap: 3px; padding-top: 2px; }
+.ws-dataset-level-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--cw-ink-3); }
+.ws-dataset-level-label { flex: none; width: 46px; }
+.ws-dataset-level-dots { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.ws-dataset-level-dots .d { width: 5px; height: 5px; border-radius: 50%; background: var(--cw-accent); opacity: 0.55; flex: none; }
+.ws-dataset-level-count { flex: none; width: 20px; text-align: end; color: var(--cw-ink-2); font-size: 11px; }
+
+/* compact activity-log rows: applied/modified constraints, manual moves --
+   deliberately the quietest tier; consecutive rows tighten up to read as
+   one log group instead of individually-spaced items. */
+.ws-event { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--cw-ink-3); padding: 1px 2px; align-self: center; max-width: 860px; width: 100%; }
+.ws-event .ws-event-time { margin-inline-start: auto; }
+.ws-event + .ws-event { margin-top: -7px; }
+
+/* analytical output earns more width than prose: text stays at a readable
+   ~860px, artifacts carrying data (result summary, comparisons) break out
+   to ~1080px. That difference is the page's visual rhythm -- prose column,
+   wide artifact, prose column. */
+.ws-breakout { max-width: 1080px; }
+
+/* one floating rounded surface, not two bordered elements side by side --
+   the canvas stays white behind it (minimal chrome), the surface itself
+   carries the border/elevation. */
+.ws-composer-row { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 24px 18px; background: var(--cw-ground); }
+.ws-composer-surface { max-width: 860px; margin-inline: auto; width: 100%; display: flex; align-items: flex-end; gap: 8px; padding: 9px 9px 9px 16px; border-radius: 20px; border: 1px solid var(--cw-line); background: var(--cw-card); box-shadow: var(--cw-shadow-card); transition: border-color 150ms ease, box-shadow 150ms ease; }
+
+/* contextual quick actions -- these fill the composer rather than firing,
+   so the user still reads and sends. Hidden as soon as they start typing. */
+.ws-composer-suggestions { max-width: 860px; margin-inline: auto; width: 100%; display: flex; gap: 7px; flex-wrap: wrap; animation: ws-in 200ms ease-out; }
+.ws-suggestion-chip { font-size: 12.5px; color: var(--cw-ink-2); background: var(--cw-panel); border: 1px solid var(--cw-line); border-radius: 999px; padding: 5px 13px; cursor: pointer; font-family: inherit; transition: background-color 130ms ease-out, color 130ms ease-out, transform 130ms ease-out; }
+.ws-suggestion-chip:hover:not(:disabled) { background: var(--cw-accent-tint); color: var(--cw-accent-strong); transform: translateY(-1px); }
+.ws-suggestion-chip:active:not(:disabled) { transform: scale(0.98); }
+.ws-suggestion-chip:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 2px; }
+.ws-suggestion-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { .ws-suggestion-chip:hover:not(:disabled), .ws-suggestion-chip:active:not(:disabled) { transform: none; } }
+.ws-composer-surface:focus-within { border-color: var(--cw-accent); box-shadow: var(--cw-shadow-hover); }
+.ws-composer-textarea { flex: 1; min-width: 0; border: 0; background: none; outline: none; resize: none; font-family: inherit; font-size: 13.5px; line-height: 1.5; color: var(--cw-ink); padding: 6px 0; max-height: 160px; overflow-y: auto; }
+.ws-composer-textarea::placeholder { color: var(--cw-ink-3); }
+.ws-composer-textarea:disabled { opacity: 0.7; }
+.ws-composer-send { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--cw-accent); color: #fff; transition: background-color 150ms ease, transform 100ms ease; }
+.ws-composer-send:hover:not(:disabled) { background: var(--cw-accent-strong); }
+.ws-composer-send:active:not(:disabled) { transform: scale(0.94); }
+.ws-composer-send:disabled { background: var(--cw-line); color: var(--cw-ink-3); cursor: not-allowed; }
+.ws-composer-send:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 2px; }
+
+/* ---- context inspector: an editor, not a settings panel. Sections are
+   separated by whitespace and hairline dividers rather than a bordered
+   card per row -- the panel background already distinguishes it from the
+   canvas, so a border around each item is doing no work. ---- */
+.ws-inspector { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; background: var(--cw-panel); padding: 22px 20px; gap: 18px; isolation: isolate; }
+@keyframes ws-insp-in { from { opacity: 0; transform: translateX(6px); } to { opacity: 1; transform: translateX(0); } }
+.ws-insp-mode { display: flex; flex-direction: column; gap: 18px; animation: ws-insp-in 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .ws-insp-mode { animation: none; } }
+
+.ws-insp-section { display: flex; flex-direction: column; gap: 8px; }
+.ws-insp-section + .ws-insp-section { padding-top: 16px; border-top: 1px solid var(--cw-line); }
+.ws-insp-title { font-size: 12px; font-weight: 600; color: var(--cw-ink-3); }
+.ws-insp-heading { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; color: var(--cw-ink); line-height: 1.35; }
+.ws-insp-type-chip { align-self: flex-start; font-size: 11px; font-weight: 600; color: var(--cw-accent-strong); background: var(--cw-accent-tint); border-radius: 999px; padding: 3px 10px; }
+.ws-relation-row { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--cw-ink-2); padding: 2px 0; }
+.ws-relation-row.separate { color: var(--cw-crit); }
+.ws-relation-row.together { color: var(--cw-good); }
+
+/* borderless row: label + value, hover surface instead of a permanent box */
+.ws-insp-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: calc(100% + 20px); margin-inline: -10px; padding: 9px 10px; border-radius: 9px; background: none; border: 0; cursor: pointer; font-size: 13.5px; color: var(--cw-ink); text-align: start; font-family: inherit; transition: background-color 130ms ease-out, transform 130ms ease-out; }
+.ws-insp-row:hover { background: var(--cw-card); transform: translateY(-1px); }
+.ws-insp-row:active { transform: scale(0.99); }
+.ws-insp-row:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 1px; }
+.ws-insp-row-meta { font-size: 12.5px; color: var(--cw-ink-3); }
+.ws-insp-row:hover .ws-chev, .ws-insp-row:focus-visible .ws-chev { opacity: 1; }
+.ws-insp-back { font-size: 12.5px; color: var(--cw-ink-3); background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; transition: color 130ms ease-out; }
+.ws-insp-back:hover { color: var(--cw-ink-2); }
+.ws-insp-back:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 2px; border-radius: 2px; }
+@media (prefers-reduced-motion: reduce) { .ws-insp-row:hover, .ws-insp-row:active { transform: none; } }
+
+.ws-rule-group { display: flex; flex-direction: column; gap: 1px; }
+.ws-rule-group-title { font-size: 12px; font-weight: 600; color: var(--cw-ink-3); padding: 6px 2px 4px; }
+.ws-rule-row { display: flex; align-items: center; gap: 9px; width: calc(100% + 20px); margin-inline: -10px; padding: 8px 10px; border-radius: 9px; border: 0; background: none; cursor: pointer; font-size: 13px; color: var(--cw-ink-2); font-family: inherit; text-align: start; transition: background-color 130ms ease-out, transform 130ms ease-out, box-shadow 130ms ease-out; }
+.ws-rule-row:hover { background: var(--cw-card); color: var(--cw-ink); transform: translateY(-1px); }
+.ws-rule-row:active { transform: scale(0.99); }
+.ws-rule-row:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 1px; }
+.ws-rule-row.is-highlighted { background: var(--cw-accent-tint); box-shadow: inset 2px 0 0 var(--cw-accent); color: var(--cw-ink); }
+.ws-rule-row:hover .ws-chev, .ws-rule-row:focus-visible .ws-chev { opacity: 1; }
+.ws-rule-row .d { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.ws-rule-row .d.hard { background: var(--cw-crit); }
+.ws-rule-row .d.soft { background: var(--cw-ink-3); }
+.ws-rule-row.inactive { opacity: 0.5; }
+.ws-rule-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .ws-rule-row:hover, .ws-rule-row:active { transform: none; } }
+
+/* ---- dataset onboarding (pre-data empty state) ---- */
+.ws-onboarding { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 0; padding: 32px; }
+.ws-onboarding-box { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; max-width: 380px; padding: 44px 32px; border: 2px dashed var(--cw-line); border-radius: 14px; background: var(--cw-panel); transition: border-color 150ms ease, background-color 150ms ease; color: var(--cw-ink-3); }
+.ws-onboarding-box.dragging { border-color: var(--cw-accent); background: var(--cw-accent-tint); }
+.ws-onboarding-box h2 { margin: 10px 0 2px; font-size: 15px; font-weight: 700; color: var(--cw-ink); }
+.ws-onboarding-box p { font-size: 13px; color: var(--cw-ink-2); margin: 0 0 16px; }
+.ws-onboarding-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+/* ---- workspace dialog (Radix) -- roster / results workbenches ---- */
+.ws-dialog-overlay { position: fixed; inset: 0; z-index: 50; background: color-mix(in srgb, var(--cw-ink) 45%, transparent); animation: ws-overlay-in 180ms ease-out; }
+.ws-dialog-content {
+  position: fixed; inset: 20px; z-index: 51; margin: auto; max-width: 1180px; max-height: calc(100vh - 40px);
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--cw-ground); border: 1px solid var(--cw-line); border-radius: 16px; box-shadow: var(--cw-shadow-hover);
+  padding: 20px 22px; isolation: isolate; outline: none;
+  animation: ws-dialog-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.ws-dialog-content:focus-visible { outline: none; }
+.ws-dialog-close { position: absolute; top: 18px; inset-inline-end: 20px; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--cw-ink-3); cursor: pointer; transition: background-color 120ms ease, color 120ms ease; }
+.ws-dialog-close:hover { background: var(--cw-card); color: var(--cw-ink); }
+.ws-dialog-close:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 1px; }
+@keyframes ws-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ws-dialog-in { from { opacity: 0; transform: translateY(6px) scale(0.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .ws-dialog-overlay, .ws-dialog-content { animation: none; } }
+/* .dp's own height is a viewport-relative calc meant for a full page --
+   inside the dialog it must fill the dialog's flex box instead. */
+.ws-dialog-content .dp { height: auto; flex: 1; min-height: 0; }
+/* leave clearance so the floating close button never overlaps the header's
+   own end-aligned content (e.g. the save-state indicator). */
+.ws-dialog-content .dp-head { padding-inline-end: 38px; }
+
+/* ---- collapsed data-zone summary card ---- */
+.dz-summary { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; background: var(--cw-card); border: 1px solid var(--cw-line); border-radius: 12px; padding: 12px 16px; box-shadow: var(--cw-shadow-card); }
+.dz-summary-main { display: flex; align-items: center; gap: 10px; }
+.dz-summary-main .ico { flex: none; width: 30px; height: 30px; border-radius: 7px; background: var(--cw-accent-tint); color: var(--cw-accent-strong); display: grid; place-items: center; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; }
+.dz-summary-main .txt { display: flex; flex-direction: column; line-height: 1.3; }
+.dz-summary-main .txt .n { font-size: 13.5px; font-weight: 700; color: var(--cw-ink); }
+.dz-summary-main .txt .m { font-size: 11.5px; color: var(--cw-ink-3); display: inline-flex; align-items: center; gap: 5px; }
+.dz-summary-main .txt .m .d { width: 5px; height: 5px; border-radius: 50%; background: var(--cw-good); flex: none; }
+.dz-summary-tallies { display: flex; gap: 14px; flex-wrap: wrap; margin-inline-start: auto; }
+.dz-tally { font-size: 12px; color: var(--cw-ink-2); display: inline-flex; align-items: center; gap: 5px; }
+.dz-tally .d { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+
+/* ---- run settings: a slim administrative strip, not a competing card ---- */
+.run-strip { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 2px 2px; }
+.run-strip-label { font-size: 12px; font-weight: 600; color: var(--cw-ink-3); }
+.run-strip-save { margin-inline-start: auto; font-size: 11.5px; color: var(--cw-good); }
+
+/* ---- constraint list: make a chat-confirmed action visibly land ---- */
+@keyframes row-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes row-highlight { 0% { background-color: color-mix(in srgb, var(--cw-accent) 13%, transparent); } 100% { background-color: transparent; } }
+.constraint-row-new { animation: row-in 220ms ease-out, row-highlight 2000ms ease-out; }
+.constraint-new-badge { flex: none; font-size: 10px; font-weight: 700; color: var(--cw-accent-strong); background: var(--cw-accent-tint); border-radius: 4px; padding: 1px 6px; letter-spacing: 0.02em; }
+
+/* ---- chat panel (conversational constraint agent) ----
+   The whole point of this surface is to read as an active expert working,
+   not a form posting into a void: every reply and every action (a
+   confirmed proposal landing in ConstraintList) gets a visible moment --
+   an entrance animation, a "thinking" state while waiting, a consistent
+   avatar so assistant turns read as someone rather than system output. */
+.chat-card { display: flex; flex-direction: column; min-height: 460px; max-height: calc(100vh - 220px); isolation: isolate; }
+.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 10px 2px; }
+.chat-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--cw-ink-3); font-size: 13px; text-align: center; padding: 24px 12px; }
+.chat-empty p { margin: 0; max-width: 30ch; }
+
+.chat-avatar { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--cw-navy); color: #fff; display: grid; place-items: center; }
+
+@keyframes chat-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+.chat-bubble { max-width: 86%; display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-radius: 10px; font-size: 13.5px; line-height: 1.55; animation: chat-in 200ms ease-out; }
+.chat-bubble-text { white-space: pre-wrap; }
+.chat-bubble.user { align-self: flex-end; background: var(--cw-accent-tint); color: var(--cw-ink); border-end-end-radius: 3px; }
+.chat-bubble.assistant { align-self: flex-start; background: var(--cw-panel); color: var(--cw-ink-2); border: 1px solid var(--cw-line-2); border-end-start-radius: 3px; }
+
+/* thinking / stream-of-thought indicator while a reply is in flight */
+.chat-dots { display: inline-flex; align-items: center; gap: 4px; padding: 2px 1px; }
+.chat-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--cw-ink-3); animation: chat-dot 1.1s ease-in-out infinite; }
+.chat-dots span:nth-child(2) { animation-delay: 0.15s; }
+.chat-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes chat-dot { 0%, 60%, 100% { opacity: 0.35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+
+.chat-proposal { align-self: stretch; background: color-mix(in srgb, var(--cw-accent) 5%, var(--cw-card)); border: 1px solid var(--cw-accent); border-radius: 10px; padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; animation: chat-in 220ms ease-out; }
+.chat-proposal-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--cw-accent-strong); text-transform: uppercase; letter-spacing: 0.03em; }
+.chat-proposal-text { font-size: 13.5px; color: var(--cw-ink); line-height: 1.5; }
+.chat-proposal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+.chat-input-row { flex: none; display: flex; gap: 8px; padding-top: 10px; border-top: 1px solid var(--cw-line-2); margin-top: 8px; }
+.chat-input { flex: 1; min-width: 0; border: 1px solid var(--cw-line); border-radius: 10px; padding: 10px 13px; font-size: 13.5px; background: var(--cw-panel); color: var(--cw-ink); transition: border-color 150ms ease, background-color 150ms ease; }
+.chat-input:focus { outline: none; border-color: var(--cw-accent); background: var(--cw-card); }
+.chat-input:disabled { opacity: 0.7; }
+.chat-input::placeholder { color: var(--cw-ink-3); }
+.chat-send { flex: none; width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: var(--cw-accent); color: #fff; transition: background-color 150ms ease, transform 100ms ease; }
+.chat-send:hover:not(:disabled) { background: var(--cw-accent-strong); }
+.chat-send:active:not(:disabled) { transform: scale(0.94); }
+.chat-send:disabled { background: var(--cw-line); color: var(--cw-ink-3); cursor: not-allowed; }
+.chat-send:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 2px; }
+
+/* ============================================================
    Class Wall — dense drag-and-drop board (light only).
    Prefixed `cw-` so it never collides with the Tailwind pages.
    ============================================================ */

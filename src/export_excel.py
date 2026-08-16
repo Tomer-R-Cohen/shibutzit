@@ -8,8 +8,11 @@ from dataclasses import asdict
 import pandas as pd
 
 from src.column_mapping import FIELD_STUDENT_ID
+from src.constraints import Constraint
 from src.metrics import class_overview_table, compute_global_metrics, student_assignment_table, violations_report
 from src.optimizer import SolverConfig
+
+_SOURCE_LABELS_HE = {"builtin_default": "ברירת מחדל", "chat": "צ'אט", "manual": "ידני"}
 
 
 def _autofit_and_style(worksheet, df: pd.DataFrame, workbook, freeze_header=True):
@@ -30,6 +33,7 @@ def export_to_excel(
     assignment: dict[int, int],
     friendship_matched: dict[int, list[int]],
     config: SolverConfig,
+    constraints: list[Constraint],
     unmatched_df: pd.DataFrame,
     solver_status: str = "",
     solver_wall_time: float = 0.0,
@@ -47,7 +51,7 @@ def export_to_excel(
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         workbook = writer.book
 
-        class_df = class_overview_table(df, assignment, friendship_matched, config)
+        class_df = class_overview_table(df, assignment, friendship_matched, constraints, config.num_classes)
         class_df.to_excel(writer, sheet_name="שיבוץ לפי כיתות", index=False)
         _autofit_and_style(writer.sheets["שיבוץ לפי כיתות"], class_df, workbook)
 
@@ -64,7 +68,8 @@ def export_to_excel(
             )
 
         gm = compute_global_metrics(
-            df, assignment, friendship_matched, config, solver_status, solver_wall_time, objective_value
+            df, assignment, friendship_matched, constraints, config.num_classes,
+            config.denominator_all_students, solver_status, solver_wall_time, objective_value,
         )
         metrics_rows = [
             {"מדד": k, "ערך": v}
@@ -90,7 +95,7 @@ def export_to_excel(
         metrics_df.to_excel(writer, sheet_name="מדדים", index=False)
         _autofit_and_style(writer.sheets["מדדים"], metrics_df, workbook)
 
-        viol_df = violations_report(df, assignment, config)
+        viol_df = violations_report(df, assignment, constraints, config.num_classes)
         if viol_df.empty:
             viol_df = pd.DataFrame([{"כלל": "אין חריגות", "כיתה": "", "צפוי": "", "בפועל": "", "חומרה": "", "קשה/רכה": "", "תיקון מוצע": ""}])
         viol_df.to_excel(writer, sheet_name="חריגות", index=False)
@@ -123,6 +128,23 @@ def export_to_excel(
         cfg_df = pd.DataFrame([{"פרמטר": k, "ערך": v} for k, v in cfg_dict.items()])
         cfg_df.to_excel(writer, sheet_name="הגדרות", index=False)
         _autofit_and_style(writer.sheets["הגדרות"], cfg_df, workbook)
+
+        constraints_rows = [
+            {
+                "מזהה": c.id,
+                "תיאור": c.label_hebrew,
+                "סוג": c.type,
+                "קשה/רכה": "קשה" if c.hard else "רכה",
+                "מקור": _SOURCE_LABELS_HE.get(c.source, c.source),
+                "פעיל": "כן" if c.active else "לא",
+            }
+            for c in constraints
+        ]
+        constraints_df = pd.DataFrame(
+            constraints_rows or [],
+            columns=["מזהה", "תיאור", "סוג", "קשה/רכה", "מקור", "פעיל"],
+        )
+        constraints_df.to_excel(writer, sheet_name="הגדרות", index=False, startrow=len(cfg_df) + 2)
 
         if raw_source_df is not None:
             raw_export = raw_source_df.copy()
