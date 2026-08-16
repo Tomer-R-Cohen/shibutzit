@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { toast } from "sonner";
 import WorkspaceShell from "@/components/workspace/WorkspaceShell";
 import TopBar from "@/components/workspace/TopBar";
 import Conversation from "@/components/workspace/Conversation";
@@ -9,6 +8,7 @@ import ContextInspector from "@/components/workspace/ContextInspector";
 import DatasetOnboarding, { DatasetReadyInfo } from "@/components/workspace/DatasetOnboarding";
 import FixturePreview from "@/components/workspace/FixturePreview";
 import RosterWorkbench from "@/components/workspace/RosterWorkbench";
+import ResultsBoard from "@/components/workspace/ResultsBoard";
 import { FIXTURES } from "@/lib/fixtures";
 import { AttentionTarget, useWorkspace } from "@/lib/workspace";
 
@@ -43,7 +43,6 @@ export default function Home() {
     setHighlight,
     workbench,
     setWorkbench,
-    constraintsSummary,
     refreshConstraintsSummary,
     decideProposal,
     sendMessage,
@@ -100,10 +99,8 @@ export default function Home() {
     setWorkbench("roster");
   }
 
-  // ResultWorkspace (the class board) is still Milestone 2 -- surface the
-  // intent honestly instead of a silent no-op click.
   function openResults() {
-    toast("מסך הכיתות המלא בפיתוח — הסיכום שלמעלה מציג את התוצאה בינתיים");
+    setWorkbench("results");
   }
 
   // An attention observation points at a real entity -- open it, and leave
@@ -136,7 +133,7 @@ export default function Home() {
   if (!datasetReady) {
     return (
       <div className="ws-shell">
-        <TopBar studentCount={null} constraintsSummary={null} onRunSolve={() => {}} solving={false} canSolve={false} hasResult={false} />
+        <TopBar onRunSolve={() => {}} solving={false} canSolve={false} hasResult={false} />
         <DatasetOnboarding onReady={handleReady} onWarning={handleWarning} />
       </div>
     );
@@ -146,14 +143,7 @@ export default function Home() {
     <>
       <WorkspaceShell
         topBar={
-          <TopBar
-            studentCount={studentCount}
-            constraintsSummary={constraintsSummary}
-            onRunSolve={runSolve}
-            solving={solving}
-            canSolve={datasetReady && !solving}
-            hasResult={hasResult}
-          />
+          <TopBar onRunSolve={runSolve} solving={solving} canSolve={datasetReady && !solving} hasResult={hasResult} />
         }
         conversation={
           <Conversation
@@ -186,6 +176,7 @@ export default function Home() {
         }
       />
       <RosterWorkbench open={workbench === "roster"} onClose={() => setWorkbench(null)} />
+      <ResultsBoard open={workbench === "results"} onClose={() => setWorkbench(null)} />
     </>
   );
 }
