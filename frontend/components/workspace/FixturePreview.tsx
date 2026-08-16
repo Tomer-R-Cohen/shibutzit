@@ -55,8 +55,6 @@ export default function FixturePreview({ fixture }: { fixture: Fixture }) {
     <WorkspaceShell
       topBar={
         <TopBar
-          studentCount={fixture.studentCount}
-          constraintsSummary={fixture.constraintsSummary}
           onRunSolve={() => {}}
           solving={false}
           canSolve={fixture.studentCount != null}

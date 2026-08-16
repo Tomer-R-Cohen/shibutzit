@@ -16,11 +16,13 @@ export default function OverviewInspector({
   constraintsSummary,
   onOpenConstraints,
   onOpenRoster,
+  onOpenRunConfig,
 }: {
   studentCount: number | null;
   constraintsSummary: ConstraintsSummary | null;
   onOpenConstraints: () => void;
   onOpenRoster?: () => void;
+  onOpenRunConfig: () => void;
 }) {
   const [runConfig, setRunConfig] = useState<RunConfig | null>(null);
 
@@ -62,10 +64,11 @@ export default function OverviewInspector({
       </div>
 
       <div className="ws-insp-section">
-        <div className="ws-insp-row" style={{ cursor: "default" }}>
+        <button className="ws-insp-row" onClick={onOpenRunConfig}>
           <span>שיבוץ</span>
           <span className="ws-insp-row-meta">{runConfig ? `${runConfig.num_classes} כיתות` : "…"}</span>
-        </div>
+          <Icon name="chevron" size={13} className="ws-chev" style={{ transform: "rotate(-90deg)" }} />
+        </button>
       </div>
     </>
   );
