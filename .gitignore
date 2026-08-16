@@ -3,10 +3,17 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.log
-sample_data/_uploaded_tmp.xlsx
+sample_data/_uploaded_tmp*.xlsx
 
 # Persisted per-session state (contains real student data)
 backend/.sessions/
+
+# Backend log files (rotated, may reference real student data in tracebacks)
+backend/.logs/
+
+# Local secrets
+.env
+backend/.env
 
 # Real student data - never version-controlled
 רשימה כללית לאיזונית.xlsx

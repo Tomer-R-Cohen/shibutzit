@@ -23,11 +23,15 @@ from src.constraints import Constraint, capacity_range_label_hebrew
 from src.excel_loader import DEFAULT_WORKBOOK_PATH, ExcelLoadError, load_workbook
 
 from ..schemas import LoadWorkbookRequest, MappingSetRequest
-from ..session_store import store
+from ..session_store import _safe_name, store
 from ..solver_inputs import ensure_defaults_seeded, sync_class_size_bounds
 from ..utils import df_records, require
 
 router = APIRouter()
+
+# Generous for a ~200-row roster spreadsheet; guards against an accidental
+# huge upload being read fully into memory.
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
 # When the data contains zero students of a category, requiring a per-class
@@ -59,7 +63,7 @@ def clamp_zero_minimums(constraints: list[Constraint], df) -> list[str]:
 
 
 @router.post("/api/workbook/load")
-async def load_workbook_endpoint(
+def load_workbook_endpoint(
     header_row: int = 4,
     first_data_row: int = 5,
     last_data_row: int = 221,
@@ -71,8 +75,12 @@ async def load_workbook_endpoint(
     path = DEFAULT_WORKBOOK_PATH
     if not use_default and file is not None:
         os.makedirs("sample_data", exist_ok=True)
-        tmp_path = os.path.join("sample_data", "_uploaded_tmp.xlsx")
-        content = await file.read()
+        # Per-session filename: two sessions uploading around the same time
+        # must not read back each other's file.
+        tmp_path = os.path.join("sample_data", f"_uploaded_tmp_{_safe_name(x_session_id)}.xlsx")
+        content = file.file.read()
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="הקובץ גדול מדי.")
         with open(tmp_path, "wb") as f:
             f.write(content)
         path = tmp_path
@@ -97,7 +105,7 @@ async def load_workbook_endpoint(
 
 
 @router.get("/api/workbook/preview")
-async def preview_workbook(x_session_id: str = Header(...)):
+def preview_workbook(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     wb = require(sess.loaded_wb, "יש לטעון קובץ תחילה (שלב 1).")
     return {
@@ -109,7 +117,7 @@ async def preview_workbook(x_session_id: str = Header(...)):
 
 
 @router.get("/api/mapping/guess")
-async def get_mapping_guess(x_session_id: str = Header(...)):
+def get_mapping_guess(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     wb = require(sess.loaded_wb, "יש לטעון קובץ תחילה (שלב 1).")
     if sess.col_mapping is None:
@@ -127,7 +135,7 @@ async def get_mapping_guess(x_session_id: str = Header(...)):
 
 
 @router.post("/api/mapping/apply")
-async def apply_mapping_endpoint(req: MappingSetRequest, x_session_id: str = Header(...)):
+def apply_mapping_endpoint(req: MappingSetRequest, x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     wb = require(sess.loaded_wb, "יש לטעון קובץ תחילה (שלב 1).")
 
@@ -176,7 +184,7 @@ async def apply_mapping_endpoint(req: MappingSetRequest, x_session_id: str = Hea
 
 
 @router.get("/api/students")
-async def get_students(x_session_id: str = Header(...)):
+def get_students(x_session_id: str = Header(...)):
     """The full mapped student list (file-derived fields + manually entered
     category fields), for the data-screen list/editor."""
     sess = store.get_or_create(x_session_id)
@@ -185,7 +193,7 @@ async def get_students(x_session_id: str = Header(...)):
 
 
 @router.get("/api/mapping/manual-entry")
-async def get_manual_entry(x_session_id: str = Header(...)):
+def get_manual_entry(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     df = require(sess.manual_entry_df, "יש להשלים תחילה את שלב המיפוי.")
     # Provide id -> display name so the editor can show who each row is,
@@ -203,7 +211,7 @@ async def get_manual_entry(x_session_id: str = Header(...)):
 
 
 @router.post("/api/mapping/manual-entry")
-async def update_manual_entry(payload: dict, x_session_id: str = Header(...)):
+def update_manual_entry(payload: dict, x_session_id: str = Header(...)):
     """Accepts {"rows": [...]} and replaces the manual-entry table, then
     reapplies mapping onto mapped_df."""
     sess = store.get_or_create(x_session_id)
@@ -226,10 +234,12 @@ async def update_manual_entry(payload: dict, x_session_id: str = Header(...)):
 
 
 @router.post("/api/mapping/manual-entry/import")
-async def import_manual_entry(file: UploadFile = File(...), x_session_id: str = Header(...)):
+def import_manual_entry(file: UploadFile = File(...), x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     require(sess.loaded_wb, "יש לטעון קובץ תחילה.")
-    content = await file.read()
+    content = file.file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="הקובץ גדול מדי.")
     try:
         if file.filename and file.filename.endswith(".csv"):
             imported = pd.read_csv(io.BytesIO(content))

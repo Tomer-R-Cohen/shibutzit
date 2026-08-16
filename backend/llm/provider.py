@@ -19,11 +19,14 @@ Env vars:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Optional
 
 from openai import OpenAI
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.moonshot.ai/v1"
 DEFAULT_MODEL = "kimi-k2.6"
@@ -68,12 +71,16 @@ def chat_completion(system_prompt: str, messages: list[dict], tools: list[dict])
     client = _client()
     model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": system_prompt}, *messages],
-        tools=tools,
-        tool_choice="auto",
-    )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": system_prompt}, *messages],
+            tools=tools,
+            tool_choice="auto",
+        )
+    except Exception:
+        logger.exception("LLM chat_completion call failed (model=%s)", model)
+        raise
     msg = response.choices[0].message
 
     tool_calls = []

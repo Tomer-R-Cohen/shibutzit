@@ -14,13 +14,13 @@ router = APIRouter()
 
 
 @router.get("/api/run-config")
-async def get_run_config(x_session_id: str = Header(...)):
+def get_run_config(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     return asdict(sess.run_config)
 
 
 @router.post("/api/run-config")
-async def set_run_config(cfg: RunConfigModel, x_session_id: str = Header(...)):
+def set_run_config(cfg: RunConfigModel, x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     sess.run_config = SolverConfig(**cfg.model_dump())
     # num_classes may have just changed -- keep the class-size rule's bounds
