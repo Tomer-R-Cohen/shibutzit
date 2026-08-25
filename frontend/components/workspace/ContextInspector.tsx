@@ -4,6 +4,7 @@ import { ConstraintsSummary, Highlight, InspectorState, Workspace } from "@/lib/
 import OverviewInspector from "./inspector/OverviewInspector";
 import ConstraintBrowser from "./inspector/ConstraintBrowser";
 import ConstraintInspector from "./inspector/ConstraintInspector";
+import RunConfigInspector from "./inspector/RunConfigInspector";
 
 // Only these fields are needed here -- narrower than the full Workspace
 // hook so fixture previews can pass a lightweight local stand-in without
@@ -60,6 +61,8 @@ export default function ContextInspector({
             onRemoved={() => open({ type: "constraints" })}
           />
         );
+      case "runConfig":
+        return <RunConfigInspector onBack={() => open({ type: "overview" })} />;
       default:
         return (
           <OverviewInspector
@@ -67,6 +70,7 @@ export default function ContextInspector({
             constraintsSummary={constraintsSummary}
             onOpenConstraints={() => open({ type: "constraints" })}
             onOpenRoster={onOpenRoster}
+            onOpenRunConfig={() => open({ type: "runConfig" })}
           />
         );
     }

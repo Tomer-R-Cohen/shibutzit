@@ -14,7 +14,7 @@ router = APIRouter()
 
 
 @router.get("/api/validation")
-async def get_validation(x_session_id: str = Header(...)):
+def get_validation(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     df = require(sess.mapped_df, "יש להשלים את מיפוי העמודות תחילה (שלב 3).")
     report = validate_students(df)
@@ -28,7 +28,7 @@ async def get_validation(x_session_id: str = Header(...)):
 
 
 @router.get("/api/friendship/diagnostics")
-async def get_friendship_diagnostics(x_session_id: str = Header(...)):
+def get_friendship_diagnostics(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     df = require(sess.mapped_df, "יש להשלים את מיפוי העמודות תחילה (שלב 3).")
     result = resolve_requests(df)
@@ -44,7 +44,7 @@ async def get_friendship_diagnostics(x_session_id: str = Header(...)):
 
 
 @router.get("/api/feasibility")
-async def get_feasibility(x_session_id: str = Header(...)):
+def get_feasibility(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     df = require(sess.mapped_df, "יש להשלים שלבים קודמים תחילה.")
     cfg, constraints = build_solver_inputs(sess)

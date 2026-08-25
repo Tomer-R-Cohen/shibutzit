@@ -14,9 +14,13 @@ feature (chat) isn't configured or is briefly unavailable.
 
 from __future__ import annotations
 
+import logging
+
 from src.constraints import Constraint
 
 from .provider import LLMNotConfiguredError, text_completion
+
+logger = logging.getLogger(__name__)
 
 NARRATION_SYSTEM_PROMPT = """את/ה עוזר/ת שמסביר/ה ליועצת/מחנכת למה שיבוץ תלמידות לכיתות נכשל.
 הפתרון עצמו כבר הוכח על ידי מנוע האופטימיזציה כבלתי אפשרי, בגלל צירוף ספציפי של כללים
@@ -67,9 +71,12 @@ def narrate_result(summary: str) -> str | None:
     leave the result artifact untouched rather than inserting filler."""
     try:
         text = text_completion(system_prompt=RESULT_SYSTEM_PROMPT, user_message=summary)
+    except LLMNotConfiguredError:
+        return None
     except Exception:
-        # Covers LLMNotConfiguredError and any transient provider failure --
-        # both mean "no commentary", never a failed solve response.
+        # Any transient provider failure -- means "no commentary", never a
+        # failed solve response, but worth a record of *why* it's missing.
+        logger.warning("narrate_result: LLM call failed", exc_info=True)
         return None
     return text.strip() or None
 
@@ -95,6 +102,7 @@ def narrate_infeasibility(conflicting: list[Constraint]) -> str:
         # Narration is a convenience on top of an already-correct, already-
         # deterministic result; never let it turn a successful infeasibility
         # diagnosis into a broken /api/optimize response.
+        logger.warning("narrate_infeasibility: LLM call failed, using fallback", exc_info=True)
         return fallback
 
     return text.strip() or fallback

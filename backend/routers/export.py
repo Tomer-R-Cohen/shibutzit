@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.get("/api/export.xlsx")
-async def export_xlsx(x_session_id: str = Header(...)):
+def export_xlsx(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     if sess.adjustment_state is None:
         raise HTTPException(status_code=409, detail="אין שיבוץ להצגה - יש להריץ אופטימיזציה תחילה.")

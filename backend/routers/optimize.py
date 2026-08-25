@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 
 from fastapi import APIRouter, Header, HTTPException
@@ -17,6 +18,7 @@ from ..solver_inputs import build_locked_constraints, build_solver_inputs
 from ..utils import df_records, require
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _narrate_if_infeasible(sess: Session, result: OptimizationResult, constraints: list[Constraint]) -> str | None:
@@ -87,7 +89,7 @@ def _comment_on_result(sess: Session, cfg, constraints: list[Constraint]) -> str
 
 
 @router.post("/api/locking")
-async def set_locking(req: LockingRequest, x_session_id: str = Header(...)):
+def set_locking(req: LockingRequest, x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     df = require(sess.mapped_df, "יש להשלים שלבים קודמים תחילה.")
     id_type = type(df[FIELD_STUDENT_ID].iloc[0]) if len(df) else int
@@ -105,7 +107,7 @@ async def set_locking(req: LockingRequest, x_session_id: str = Header(...)):
 
 
 @router.get("/api/locking")
-async def get_locking(x_session_id: str = Header(...)):
+def get_locking(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     df = require(sess.mapped_df, "יש להשלים שלבים קודמים תחילה.")
     rows = [
@@ -121,7 +123,7 @@ async def get_locking(x_session_id: str = Header(...)):
 # computed result as a side effect. Each call here triggers exactly one
 # optimize() call.
 @router.post("/api/optimize")
-async def run_optimize(x_session_id: str = Header(...)):
+def run_optimize(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     df = require(sess.mapped_df, "יש להשלים שלבים קודמים תחילה.")
     if sess.validation_report is not None and sess.validation_report.has_errors():
@@ -135,8 +137,13 @@ async def run_optimize(x_session_id: str = Header(...)):
     try:
         result = optimize(df, cfg, constraints, friendship_matched=matched)
     except OptimizationError as e:
+        logger.warning("optimize() raised for session %s: %s", x_session_id, e)
         raise HTTPException(status_code=400, detail=str(e))
 
+    logger.info(
+        "optimize done session=%s status=%s feasible=%s wall_time=%.2fs",
+        x_session_id, result.status_name, result.is_feasible, result.wall_time_seconds,
+    )
     sess.opt_result = result
     sess.adjustment_state = AdjustmentState(assignment=dict(result.assignment), locked=set(locked.keys()))
     explanation = _narrate_if_infeasible(sess, result, constraints)
@@ -162,7 +169,7 @@ def _require_result(sess):
 
 
 @router.get("/api/results/overview")
-async def results_overview(x_session_id: str = Header(...)):
+def results_overview(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     _require_result(sess)
     df = sess.mapped_df
@@ -174,7 +181,7 @@ async def results_overview(x_session_id: str = Header(...)):
 
 
 @router.get("/api/results/students")
-async def results_students(x_session_id: str = Header(...)):
+def results_students(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     _require_result(sess)
     df = sess.mapped_df
@@ -185,7 +192,7 @@ async def results_students(x_session_id: str = Header(...)):
 
 
 @router.get("/api/results/metrics")
-async def results_metrics(x_session_id: str = Header(...)):
+def results_metrics(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     _require_result(sess)
     df = sess.mapped_df
@@ -200,7 +207,7 @@ async def results_metrics(x_session_id: str = Header(...)):
 
 
 @router.get("/api/results/violations")
-async def results_violations(x_session_id: str = Header(...)):
+def results_violations(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     _require_result(sess)
     df = sess.mapped_df
@@ -211,7 +218,7 @@ async def results_violations(x_session_id: str = Header(...)):
 
 
 @router.get("/api/results/friendship")
-async def results_friendship(x_session_id: str = Header(...)):
+def results_friendship(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     _require_result(sess)
     df = sess.mapped_df
@@ -225,7 +232,7 @@ async def results_friendship(x_session_id: str = Header(...)):
 
 
 @router.post("/api/adjustment/move")
-async def adjustment_move(req: MoveStudentRequest, x_session_id: str = Header(...)):
+def adjustment_move(req: MoveStudentRequest, x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     if sess.adjustment_state is None:
         raise HTTPException(status_code=409, detail="יש להריץ אופטימיזציה תחילה (שלב 8).")
@@ -247,7 +254,7 @@ async def adjustment_move(req: MoveStudentRequest, x_session_id: str = Header(..
 
 
 @router.post("/api/adjustment/reoptimize")
-async def adjustment_reoptimize(x_session_id: str = Header(...)):
+def adjustment_reoptimize(x_session_id: str = Header(...)):
     """Lock all current assignments and re-optimize the remainder. Single
     optimize() call, mirroring the "lock all & re-optimize" button in the
     Streamlit app's step 10."""
@@ -264,8 +271,13 @@ async def adjustment_reoptimize(x_session_id: str = Header(...)):
     try:
         result = optimize(df, cfg, all_constraints, friendship_matched=matched)
     except OptimizationError as e:
+        logger.warning("reoptimize() raised for session %s: %s", x_session_id, e)
         raise HTTPException(status_code=400, detail=str(e))
 
+    logger.info(
+        "reoptimize done session=%s status=%s feasible=%s wall_time=%.2fs",
+        x_session_id, result.status_name, result.is_feasible, result.wall_time_seconds,
+    )
     sess.opt_result = result
     state.assignment = dict(result.assignment)
     sess.adjustment_state = state

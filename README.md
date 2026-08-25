@@ -34,6 +34,10 @@ Then open http://localhost:3000. The frontend talks to the backend at
 `NEXT_PUBLIC_API_BASE`). Each browser gets its own `X-Session-Id` (stored in
 `localStorage`); the backend keeps one session per id.
 
+Config is via environment variables — see `.env.example` (backend: LLM
+provider, CORS) and `frontend/.env.example` (API base URL) for the full
+list and defaults.
+
 ## How the app is organized
 
 The UI is one working screen plus two supporting surfaces:

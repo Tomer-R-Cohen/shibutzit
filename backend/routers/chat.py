@@ -87,7 +87,7 @@ def _build_proposal(tool_name: str, raw_args: dict, sess: Session) -> tuple[Pend
 
 
 @router.post("/api/chat/message")
-async def send_chat_message(req: ChatMessageRequest, x_session_id: str = Header(...)):
+def send_chat_message(req: ChatMessageRequest, x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     df = require(sess.mapped_df, "יש להשלים שלבים קודמים תחילה.")
     sess.token_map.ensure_all(df[FIELD_STUDENT_ID].tolist())
@@ -145,7 +145,7 @@ async def send_chat_message(req: ChatMessageRequest, x_session_id: str = Header(
 
 
 @router.post("/api/chat/confirm")
-async def confirm_pending_proposal(x_session_id: str = Header(...)):
+def confirm_pending_proposal(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     proposal = sess.pending_proposal
     if proposal is None:
@@ -177,7 +177,7 @@ async def confirm_pending_proposal(x_session_id: str = Header(...)):
 
 
 @router.post("/api/chat/reject")
-async def reject_pending_proposal(x_session_id: str = Header(...)):
+def reject_pending_proposal(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     if sess.pending_proposal is None:
         raise HTTPException(status_code=409, detail="אין הצעה ממתינה.")
@@ -188,7 +188,7 @@ async def reject_pending_proposal(x_session_id: str = Header(...)):
 
 
 @router.get("/api/chat/history")
-async def get_chat_history(x_session_id: str = Header(...)):
+def get_chat_history(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     return {
         "messages": sess.chat_history,
@@ -197,7 +197,7 @@ async def get_chat_history(x_session_id: str = Header(...)):
 
 
 @router.get("/api/constraints")
-async def list_constraints(x_session_id: str = Header(...)):
+def list_constraints(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     return {"constraints": [asdict(c) for c in sess.constraints]}
 
@@ -208,7 +208,7 @@ class ConstraintPatchRequest(BaseModel):
 
 
 @router.patch("/api/constraints/{constraint_id}")
-async def patch_constraint(constraint_id: str, req: ConstraintPatchRequest, x_session_id: str = Header(...)):
+def patch_constraint(constraint_id: str, req: ConstraintPatchRequest, x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     target = next((c for c in sess.constraints if c.id == constraint_id), None)
     if target is None:
@@ -222,7 +222,7 @@ async def patch_constraint(constraint_id: str, req: ConstraintPatchRequest, x_se
 
 
 @router.delete("/api/constraints/{constraint_id}")
-async def delete_constraint(constraint_id: str, x_session_id: str = Header(...)):
+def delete_constraint(constraint_id: str, x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     before = len(sess.constraints)
     sess.constraints = [c for c in sess.constraints if c.id != constraint_id]
