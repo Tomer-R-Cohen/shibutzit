@@ -80,6 +80,7 @@ def export_to_excel(
                 "גודל מינימלי": gm.class_size_min,
                 "גודל מקסימלי": gm.class_size_max,
                 "פער גדלים": gm.class_size_spread,
+                "תלמידות עם בקשות חברות": gm.students_with_requests,
                 "% חברות הדדית": gm.mutual_satisfied_pct,
                 "% 2+ חברות מבוקשות": gm.two_friends_satisfied_pct,
                 "בקשות מסופקות במלואן": gm.satisfied_requests,

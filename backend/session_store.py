@@ -25,6 +25,8 @@ import pandas as pd
 
 from src.column_mapping import ColumnMapping
 from src.constraints import Constraint
+from src.data_requirements import DataRequirement
+from src.dataset_schema import DatasetSchema, ExtraColumn
 from src.excel_loader import LoadedWorkbook
 from src.friendship_graph import NameResolutionResult
 from src.manual_adjustments import AdjustmentState
@@ -75,6 +77,13 @@ class Session:
     opt_result: Optional[OptimizationResult] = None
     adjustment_state: Optional[AdjustmentState] = None
     constraints: list[Constraint] = field(default_factory=list)
+    # Columns this workbook has that the app doesn't know by name. Detected
+    # at mapping time; what makes rules about arbitrary spreadsheet columns
+    # possible. See src/dataset_schema.py.
+    dataset_schema: DatasetSchema = field(default_factory=DatasetSchema)
+    # Columns the counselor agreed to add to the workbook, recorded during
+    # planning -- before any file exists. See src/data_requirements.py.
+    data_requirements: list[DataRequirement] = field(default_factory=list)
     chat_history: list[dict] = field(default_factory=list)
     pending_proposal: Optional[PendingProposal] = None
     token_map: TokenMap = field(default_factory=TokenMap)
@@ -130,6 +139,11 @@ class SessionStore:
                 else None
             ),
             "constraints": [asdict(c) for c in sess.constraints],
+            "dataset_schema": sess.dataset_schema.to_dicts() if sess.dataset_schema else [],
+            "data_requirements": [
+                {"id": r.id, "label": r.label, "kind": r.kind, "reason": r.reason, "values": list(r.values)}
+                for r in sess.data_requirements
+            ],
             "chat_history": sess.chat_history,
             "pending_proposal": asdict(sess.pending_proposal) if sess.pending_proposal else None,
             "token_map": {
@@ -159,6 +173,13 @@ class SessionStore:
 
         rc = payload.get("run_config")
         if rc:
+            # The search budget used to default to 30s and was only reachable
+            # from a sub-view nobody opened, so a stored 30.0 is the old
+            # default rather than a choice anyone made. Carry such sessions
+            # onto the new 60s default; any other value was deliberate and is
+            # left alone.
+            if rc.get("time_limit_seconds") == 30.0:
+                rc = {**rc, "time_limit_seconds": 60.0}
             try:
                 sess.run_config = SolverConfig(**rc)
             except Exception:
@@ -190,6 +211,20 @@ class SessionStore:
         if raw_constraints:
             try:
                 sess.constraints = [Constraint(**c) for c in raw_constraints]
+            except Exception:
+                pass
+
+        raw_schema = payload.get("dataset_schema")
+        if raw_schema:
+            try:
+                sess.dataset_schema = DatasetSchema(extras=[ExtraColumn(**c) for c in raw_schema])
+            except Exception:
+                pass
+
+        raw_reqs = payload.get("data_requirements")
+        if raw_reqs:
+            try:
+                sess.data_requirements = [DataRequirement(**r) for r in raw_reqs]
             except Exception:
                 pass
 

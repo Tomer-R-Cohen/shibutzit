@@ -20,6 +20,7 @@ from src.column_mapping import (
     guess_mapping,
 )
 from src.constraints import Constraint, capacity_range_label_hebrew
+from src.dataset_schema import attach_extra_columns, detect_extra_columns
 from src.excel_loader import DEFAULT_WORKBOOK_PATH, ExcelLoadError, load_workbook
 
 from ..schemas import LoadWorkbookRequest, MappingSetRequest
@@ -166,6 +167,19 @@ def apply_mapping_endpoint(req: MappingSetRequest, x_session_id: str = Header(..
         try:
             mapped = apply_mapping(wb.raw_df, cm, manual_df=sess.manual_entry_df)
         except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    # Everything else in the workbook. Detected from the values, attached to
+    # the mapped frame under `x_`-prefixed keys, and described on the session
+    # so the chat can write rules about columns this app has never heard of.
+    # No defaults are seeded for them: what "מיוחד" means is the counselor's
+    # call, not something to guess at import time.
+    mapped_sources = {c for c in cm.mapping.values() if c}
+    sess.dataset_schema = detect_extra_columns(wb.raw_df, mapped_sources)
+    if sess.dataset_schema.extras:
+        try:
+            mapped = attach_extra_columns(mapped, wb.raw_df, sess.dataset_schema)
+        except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
     sess.mapped_df = mapped

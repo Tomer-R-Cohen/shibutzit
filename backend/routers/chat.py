@@ -27,9 +27,18 @@ from src.chat.mentions import Mention, redact_text, resolve_mentions_in_text
 from src.column_mapping import FIELD_STUDENT_ID
 from src.constraints import Constraint
 
-from ..llm.provider import LLMNotConfiguredError, chat_completion
-from ..llm.prompts import build_constraints_context, build_roster_context, build_system_prompt
-from ..llm.tools import TOOL_MODELS, ToolArgumentError, args_to_constraint, build_tool_definitions
+from ..llm.agent import run_agent_turn
+from ..llm.provider import LLMNotConfiguredError
+from ..llm.prompts import (
+    build_constraints_context,
+    build_dataset_columns_context,
+    build_planning_context,
+    build_result_context,
+    build_roster_context,
+    build_system_prompt,
+)
+from ..llm.read_tools import groupable_field_kinds, groupable_fields
+from ..llm.tools import TOOL_MODELS, ToolArgumentError, args_to_constraint
 from ..session_store import PendingProposal, Session, store
 from ..solver_inputs import build_solver_inputs
 from ..utils import require
@@ -80,7 +89,17 @@ def _build_proposal(tool_name: str, raw_args: dict, sess: Session) -> tuple[Pend
         summary = f"הבנתי: להסיר את הכלל '{target.label_hebrew}' - לאשר?"
         return proposal, summary
 
-    constraint = args_to_constraint(tool_name, args, sess.token_map.id_for)
+    # A group may now name any column this particular workbook contains, so
+    # the set of legal fields comes from the dataset rather than from a
+    # hardcoded enum -- and an invented one is rejected here rather than
+    # becoming a rule that silently matches nobody.
+    constraint = args_to_constraint(
+        tool_name,
+        args,
+        sess.token_map.id_for,
+        allowed_fields=groupable_fields(sess),
+        field_kinds=groupable_field_kinds(sess),
+    )
     proposal = PendingProposal(kind="propose", summary_hebrew=args.rationale_hebrew, constraint=asdict(constraint))
     summary = f"הבנתי: {args.rationale_hebrew} - זו דרישה {'קשה' if constraint.hard else 'רכה'}. לאשר?"
     return proposal, summary
@@ -89,59 +108,87 @@ def _build_proposal(tool_name: str, raw_args: dict, sess: Session) -> tuple[Pend
 @router.post("/api/chat/message")
 def send_chat_message(req: ChatMessageRequest, x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
-    df = require(sess.mapped_df, "יש להשלים שלבים קודמים תחילה.")
-    sess.token_map.ensure_all(df[FIELD_STUDENT_ID].tolist())
+    df = sess.mapped_df
 
-    mentions = resolve_mentions_in_text(req.message, df)
-    ambiguous = [m for m in mentions if m.status == "ambiguous"]
-    unmatched = [m for m in mentions if m.status == "unmatched"]
-    if ambiguous or unmatched:
-        clarification = _clarification_message(ambiguous, unmatched)
-        sess.chat_history.append({"role": "user", "content": req.message})
-        sess.chat_history.append({"role": "assistant", "content": clarification})
-        store.save(sess)
-        return {"reply": clarification, "pending_proposal": None}
+    if df is not None:
+        sess.token_map.ensure_all(df[FIELD_STUDENT_ID].tolist())
+        mentions = resolve_mentions_in_text(req.message, df)
+        ambiguous = [m for m in mentions if m.status == "ambiguous"]
+        unmatched = [m for m in mentions if m.status == "unmatched"]
+        if ambiguous or unmatched:
+            clarification = _clarification_message(ambiguous, unmatched)
+            sess.chat_history.append({"role": "user", "content": req.message})
+            sess.chat_history.append({"role": "assistant", "content": clarification})
+            store.save(sess)
+            return {"reply": clarification, "pending_proposal": None}
+        redacted = redact_text(req.message, mentions, sess.token_map.token_for)
+    else:
+        # Planning mode: no roster, so there is no name-to-token map to
+        # redact against and nothing to resolve a mention to. The message
+        # goes out as typed. The prompt tells the model not to solicit
+        # names at this stage precisely because they could not be protected
+        # here the way they are once a roster exists.
+        redacted = req.message
 
-    redacted = redact_text(req.message, mentions, sess.token_map.token_for)
     sess.chat_history.append({"role": "user", "content": redacted})
 
-    _, constraints = build_solver_inputs(sess)
+    cfg, constraints = build_solver_inputs(sess)
+    has_result = sess.opt_result is not None and sess.opt_result.is_feasible and sess.adjustment_state is not None
+    class_sizes = None
+    if has_result:
+        sizes = [0] * cfg.num_classes
+        for cls in sess.adjustment_state.assignment.values():
+            if 0 <= cls < cfg.num_classes:
+                sizes[cls] += 1
+        class_sizes = sizes
+
     system_prompt = build_system_prompt(
-        build_roster_context(df, sess.token_map),
+        build_roster_context(df),
         build_constraints_context(constraints),
+        build_result_context(has_result, cfg.num_classes, class_sizes),
+        build_dataset_columns_context(sess.dataset_schema),
+        build_planning_context(df is None, cfg.num_classes, sess.data_requirements),
     )
 
     try:
-        completion = chat_completion(system_prompt=system_prompt, messages=sess.chat_history, tools=build_tool_definitions())
+        turn = run_agent_turn(
+            sess,
+            system_prompt,
+            sess.chat_history,
+            validate_write=lambda call: _build_proposal(call.name, call.arguments, sess),
+        )
     except LLMNotConfiguredError as e:
         # Don't persist the user turn without a matching reply -- leave the
         # history as it was before this call and surface a clear error.
         sess.chat_history.pop()
         raise HTTPException(status_code=503, detail=str(e))
 
-    if completion.tool_calls:
-        # v1 scope: one proposal per turn. If the model returns more than
-        # one tool call, only the first becomes a pending proposal; the
-        # rest are dropped rather than silently applying multiple changes
-        # from a single unreviewed turn.
-        tool_call = completion.tool_calls[0]
+    # What the agent looked at, so the counselor can see it worked rather
+    # than just waited. Read tools only -- writes are shown as the proposal.
+    steps = [{"tool": s["tool"], "ok": s["ok"]} for s in turn.steps]
+    # A planning tool changed persisted state (checklist entry, class
+    # count). The UI uses this to re-read the panels rather than poll --
+    # "the rules list updates live" is this flag plus a refresh key.
+    state_changed = turn.state_changed
+
+    if turn.write_call is not None:
         try:
-            proposal, summary = _build_proposal(tool_call.name, tool_call.arguments, sess)
+            proposal, summary = _build_proposal(turn.write_call.name, turn.write_call.arguments, sess)
         except (ValidationError, ToolArgumentError) as e:
             reply = f"לא הצלחתי לפרש את הבקשה כראוי ({e}). אפשר לנסח אחרת?"
             sess.chat_history.append({"role": "assistant", "content": reply})
             store.save(sess)
-            return {"reply": reply, "pending_proposal": None}
+            return {"reply": reply, "pending_proposal": None, "steps": steps, "state_changed": state_changed}
 
         sess.pending_proposal = proposal
         sess.chat_history.append({"role": "assistant", "content": summary})
         store.save(sess)
-        return {"reply": summary, "pending_proposal": asdict(proposal)}
+        return {"reply": summary, "pending_proposal": asdict(proposal), "steps": steps, "state_changed": state_changed}
 
-    reply = completion.text or ""
+    reply = turn.text or ""
     sess.chat_history.append({"role": "assistant", "content": reply})
     store.save(sess)
-    return {"reply": reply, "pending_proposal": None}
+    return {"reply": reply, "pending_proposal": None, "steps": steps, "state_changed": state_changed}
 
 
 @router.post("/api/chat/confirm")

@@ -49,6 +49,9 @@ export default function FixturePreview({ fixture }: { fixture: Fixture }) {
     setInspector,
     constraintsSummary: fixture.constraintsSummary,
     refreshConstraintsSummary: async () => {},
+    appendRunConfigChange: () => {},
+    dataVersion: 0,
+    bumpDataVersion: () => {},
   };
 
   return (
@@ -56,9 +59,8 @@ export default function FixturePreview({ fixture }: { fixture: Fixture }) {
       topBar={
         <TopBar
           onRunSolve={() => {}}
-          solving={false}
           canSolve={fixture.studentCount != null}
-          hasResult={timeline.some((item) => item.kind === "solve_result")}
+          runState={timeline.some((item) => item.kind === "solve_result") ? "fresh" : "none"}
         />
       }
       conversation={
@@ -67,6 +69,7 @@ export default function FixturePreview({ fixture }: { fixture: Fixture }) {
           sending={false}
           solving={false}
           deciding={deciding}
+          studentCount={fixture.studentCount}
           onSend={() => {}}
           onConfirmProposal={(id) => decideProposal(id, "confirm")}
           onRejectProposal={(id) => decideProposal(id, "reject")}

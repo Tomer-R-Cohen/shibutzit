@@ -135,7 +135,7 @@ export default function ConstraintInspector({
           <div className="text-xs text-[var(--cw-ink-3)]">{SOURCE_LABELS[constraint.source] ?? constraint.source}</div>
           <ConstraintShape constraint={constraint} />
 
-          <div className="ws-insp-row" style={{ cursor: "default", marginTop: 14 }}>
+          <div className="ws-insp-kv" style={{ marginTop: 14 }}>
             <span>סטטוס</span>
             <button
               onClick={() => handleToggleActive(!constraint.active)}
@@ -146,7 +146,7 @@ export default function ConstraintInspector({
             </button>
           </div>
 
-          <div className="ws-insp-row" style={{ cursor: "default" }}>
+          <div className="ws-insp-kv">
             <span>חומרה</span>
             <button
               onClick={() => handleToggleHard(!constraint.hard)}

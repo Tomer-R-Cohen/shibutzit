@@ -4,6 +4,7 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Header
 
+from src.data_requirements import summarize
 from src.optimizer import SolverConfig
 
 from ..schemas import RunConfigModel
@@ -17,6 +18,25 @@ router = APIRouter()
 def get_run_config(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     return asdict(sess.run_config)
+
+
+@router.get("/api/data-requirements")
+def get_data_requirements(x_session_id: str = Header(...)):
+    """The columns agreed during planning, checked against whatever workbook
+    has since been loaded. This is the counselor's Excel checklist."""
+    sess = store.get_or_create(x_session_id)
+    out = summarize(sess.data_requirements, sess.dataset_schema)
+    out["has_dataset"] = sess.mapped_df is not None
+    return out
+
+
+@router.delete("/api/data-requirements/{requirement_id}")
+def delete_data_requirement(requirement_id: str, x_session_id: str = Header(...)):
+    sess = store.get_or_create(x_session_id)
+    before = len(sess.data_requirements)
+    sess.data_requirements = [r for r in sess.data_requirements if r.id != requirement_id]
+    store.save(sess)
+    return {"removed": before - len(sess.data_requirements) > 0}
 
 
 @router.post("/api/run-config")

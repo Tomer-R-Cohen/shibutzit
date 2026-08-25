@@ -205,13 +205,20 @@ export function getFeasibility() {
 
 // ---- Step 6: run parameters ----
 // Every actual rule (including the built-in defaults) lives in the
-// constraint list below -- this is just num_classes / time limit / seed.
+// constraint list below -- this is just num_classes and the time budget.
 export interface RunConfig {
   num_classes: number;
   denominator_all_students: boolean;
   mutual_target_pct: number;
   two_friends_target_pct: number;
   time_limit_seconds: number;
+  /**
+   * Round-tripped, never rendered and never edited. The seed exists so that
+   * identical inputs produce an identical assignment; exposing it would only
+   * let a user reshuffle between equally-good answers, which reads as the
+   * app being unreliable. `setRunConfig` PUTs the whole object back, so the
+   * field has to survive the trip -- it just has no UI.
+   */
   random_seed: number;
 }
 export function getRunConfig() {
@@ -255,15 +262,53 @@ export interface PendingProposal {
   target_constraint_id?: string | null;
   changes?: Record<string, unknown> | null;
 }
+/** One read tool the agent ran while working on a turn. Reads execute
+ *  immediately server-side; only writes come back as a proposal. */
+export interface AgentStep {
+  tool: string;
+  ok: boolean;
+}
 export function getChatHistory() {
   return request<{ messages: ChatMessage[]; pending_proposal: PendingProposal | null }>("/api/chat/history");
 }
 export function sendChatMessage(message: string) {
-  return request<{ reply: string; pending_proposal: PendingProposal | null }>("/api/chat/message", {
+  return request<{
+    reply: string;
+    pending_proposal: PendingProposal | null;
+    steps?: AgentStep[];
+    /** A planning tool changed persisted state, so the panels are stale. */
+    state_changed?: boolean;
+  }>("/api/chat/message", {
     method: "POST",
     body: JSON.stringify({ message }),
   });
 }
+/** One column the counselor agreed to add to the workbook, from planning. */
+export interface DataRequirement {
+  id: string;
+  label: string;
+  kind: "flag" | "category" | "number";
+  kind_label: string;
+  how_to_fill: string;
+  reason: string;
+  values: string[];
+  satisfied: boolean;
+  column_key: string | null;
+}
+export interface DataRequirementsResponse {
+  requirements: DataRequirement[];
+  total: number;
+  satisfied: number;
+  missing: number;
+  has_dataset: boolean;
+}
+export function getDataRequirements() {
+  return request<DataRequirementsResponse>("/api/data-requirements");
+}
+export function deleteDataRequirement(id: string) {
+  return request<{ removed: boolean }>(`/api/data-requirements/${id}`, { method: "DELETE" });
+}
+
 export function confirmChatProposal() {
   return request<{ applied: boolean; result: unknown }>("/api/chat/confirm", { method: "POST" });
 }
@@ -337,6 +382,9 @@ export interface GlobalMetrics {
   partial_requests: number;
   unsatisfied_requests: number;
   violations_count: number;
+  // 0 means no friendship data exists for this run -- mutual_satisfied_pct
+  // being 0 in that case means "no data", not "every request failed".
+  students_with_requests: number;
   solver_status: string;
   solver_wall_time: number;
   objective_value: number | null;

@@ -1,6 +1,6 @@
 "use client";
 
-import { KeyboardEvent, useEffect, useRef, useState } from "react";
+import { KeyboardEvent, useEffect, useImperativeHandle, useRef, RefObject } from "react";
 import { Icon } from "@/components/Icon";
 
 /**
@@ -9,20 +9,37 @@ import { Icon } from "@/components/Icon";
  * from the AI Elements PromptInput structure (toolbar + state-aware submit
  * button), re-implemented against our own send flow instead of the `ai`
  * SDK it ships with. Enter sends, Shift+Enter inserts a newline.
+ *
+ * The draft lives in the parent rather than here, because the first-run
+ * launcher sits outside this component and fills it -- same click-to-fill
+ * contract the suggestion chips already used, just from further away.
  */
+export interface ComposerHandle {
+  focus: () => void;
+}
+
 export default function Composer({
+  value,
+  onValueChange,
   onSend,
   sending,
   placeholder,
   suggestions,
+  ref,
 }: {
+  value: string;
+  onValueChange: (v: string) => void;
   onSend: (text: string) => void;
   sending: boolean;
   placeholder: string;
   suggestions: string[];
+  ref?: RefObject<ComposerHandle | null>;
 }) {
-  const [input, setInput] = useState("");
+  const input = value;
+  const setInput = onValueChange;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useImperativeHandle(ref, () => ({ focus: () => textareaRef.current?.focus() }), []);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -78,6 +95,7 @@ export default function Composer({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           rows={1}
+          dir="auto"
           className="ws-composer-textarea"
           disabled={sending}
         />

@@ -22,7 +22,20 @@ from pydantic import BaseModel, Field
 
 from src.constraints import Constraint
 
-_CATEGORY_FIELDS = Literal["differential", "ethiopian_origin", "inclusion", "hamar"]
+# Was a closed Literal of this school's four categories, which meant the
+# model physically could not name a fifth one -- a school with a "twins"
+# column had no way to express a rule about it. It is now a free string
+# validated at build time against the columns this particular dataset
+# actually has (see `_resolve_field`), so the allowed set comes from the
+# uploaded workbook rather than from this file.
+_GROUP_FIELD_DESCRIPTION = (
+    "A column key to constrain, exactly as returned by get_dataset_columns "
+    "(e.g. differential, ethiopian_origin, or an x_-prefixed key from this "
+    "school's own spreadsheet). Omit and use group_members for an ad hoc group."
+)
+
+# The semantic flag columns every dataset has, whatever else it carries.
+BUILTIN_FLAG_FIELDS = {"differential", "ethiopian_origin", "inclusion", "hamar"}
 
 
 class ToolArgumentError(Exception):
@@ -54,8 +67,13 @@ class ProposeAtLeastOneOfArgs(BaseModel):
 
 
 class ProposeCapacityArgs(BaseModel):
-    group_field: Optional[_CATEGORY_FIELDS] = Field(
-        default=None, description="An existing data category to constrain. Omit and use group_members for an ad hoc group not in the data."
+    group_field: Optional[str] = Field(default=None, description=_GROUP_FIELD_DESCRIPTION)
+    group_value: Optional[str] = Field(
+        default=None,
+        description=(
+            "For a category-kind column, the single value to constrain (e.g. group_field='x_שכונה', "
+            "group_value='רמת אביב'). Omit for flag-kind columns, which are simply true/false."
+        ),
     )
     group_members: Optional[list[str]] = Field(
         default=None, description="Anonymized tokens forming an ad hoc group the counselor just described (not an existing data column)"
@@ -68,7 +86,10 @@ class ProposeCapacityArgs(BaseModel):
 
 
 class ProposeBalanceArgs(BaseModel):
-    group_field: Optional[_CATEGORY_FIELDS] = Field(default=None, description="An existing data category to spread evenly across classes")
+    group_field: Optional[str] = Field(default=None, description=_GROUP_FIELD_DESCRIPTION)
+    group_value: Optional[str] = Field(
+        default=None, description="For a category-kind column, the single value to spread evenly. Omit to spread a flag column."
+    )
     group_members: Optional[list[str]] = Field(default=None, description="Anonymized tokens forming an ad hoc group to spread evenly")
     group_label_hebrew: Optional[str] = Field(default=None, description="Short Hebrew label for the ad hoc group; required when group_members is used")
     weight: float = Field(default=1.0, description="Relative importance of this balance preference")
@@ -129,13 +150,51 @@ def build_tool_definitions() -> list[dict]:
     return tools
 
 
+def _resolve_field(group_field: str, allowed_fields: Optional[set[str]]) -> None:
+    """Reject a column this dataset doesn't have, before it reaches a rule.
+
+    Since `group_field` stopped being a closed enum, nothing in the schema
+    stops the model inventing a plausible-sounding column. Catching it here
+    turns a hallucinated field into a clarifying question -- the alternative
+    is a constraint whose group silently resolves to zero students, which
+    looks like it applied and does nothing.
+    """
+    if allowed_fields is None:  # caller didn't supply a dataset; skip the check
+        return
+    if group_field not in allowed_fields:
+        known = ", ".join(sorted(allowed_fields)) or "(none)"
+        raise ToolArgumentError(f"unknown column '{group_field}'. Columns in this dataset: {known}")
+
+
 def _resolve_group(
     group_field: Optional[str],
     group_members: Optional[list[str]],
     group_label_hebrew: Optional[str],
     detokenize: Callable[[str], Optional[int]],
+    allowed_fields: Optional[set[str]] = None,
+    group_value: Optional[str] = None,
+    field_kinds: Optional[dict[str, str]] = None,
+    for_balance: bool = False,
 ) -> dict:
     if group_field:
+        _resolve_field(group_field, allowed_fields)
+        # An explicit value always means that one value.
+        if group_value is not None and str(group_value) != "":
+            return {"kind": "field_value", "field": group_field, "value": group_value}
+
+        kind = (field_kinds or {}).get(group_field, "flag")
+        if kind == "category":
+            # {"kind": "field"} tests bool(value), which on a text column is
+            # true for every student. Building a rule that way produces one
+            # that looks applied and does nothing -- the worst failure this
+            # code can have. "Balance by academic level" means spread each
+            # level evenly, which is `field_all_values`.
+            if for_balance:
+                return {"kind": "field_all_values", "field": group_field}
+            raise ToolArgumentError(
+                f"'{group_field}' holds one of several values, not yes/no. For a capacity rule say which "
+                f"value to cap (group_value), or use a balance rule to spread all of them evenly."
+            )
         return {"kind": "field", "field": group_field}
     if group_members:
         ids = [detokenize(t) for t in group_members]
@@ -146,10 +205,19 @@ def _resolve_group(
     raise ToolArgumentError("either group_field or group_members must be provided")
 
 
-def args_to_constraint(tool_name: str, args: BaseModel, detokenize: Callable[[str], Optional[int]]) -> Constraint:
+def args_to_constraint(
+    tool_name: str,
+    args: BaseModel,
+    detokenize: Callable[[str], Optional[int]],
+    allowed_fields: Optional[set[str]] = None,
+    field_kinds: Optional[dict[str, str]] = None,
+) -> Constraint:
     """Build a (not-yet-applied) Constraint from validated propose_* args.
-    Raises ToolArgumentError if a student token doesn't resolve -- should
-    only happen if the model hallucinated a token it wasn't given."""
+
+    Raises ToolArgumentError if a student token doesn't resolve, or if a
+    group names a column this dataset doesn't have -- both mean the model
+    invented something it wasn't given. `allowed_fields` is every column
+    the current workbook offers; None skips the check."""
     if tool_name == "propose_separate":
         a, b = detokenize(args.student_a), detokenize(args.student_b)
         if a is None or b is None:
@@ -184,7 +252,11 @@ def args_to_constraint(tool_name: str, args: BaseModel, detokenize: Callable[[st
         )
 
     if tool_name == "propose_capacity":
-        group = _resolve_group(args.group_field, args.group_members, args.group_label_hebrew, detokenize)
+        group = _resolve_group(
+            args.group_field, args.group_members, args.group_label_hebrew, detokenize,
+            allowed_fields=allowed_fields, group_value=getattr(args, "group_value", None),
+            field_kinds=field_kinds, for_balance=False,
+        )
         return Constraint(
             type="capacity",
             hard=args.hard,
@@ -194,7 +266,11 @@ def args_to_constraint(tool_name: str, args: BaseModel, detokenize: Callable[[st
         )
 
     if tool_name == "propose_balance":
-        group = _resolve_group(args.group_field, args.group_members, args.group_label_hebrew, detokenize)
+        group = _resolve_group(
+            args.group_field, args.group_members, args.group_label_hebrew, detokenize,
+            allowed_fields=allowed_fields, group_value=getattr(args, "group_value", None),
+            field_kinds=field_kinds, for_balance=True,
+        )
         return Constraint(
             type="balance", hard=args.hard, args={"group": group, "weight": args.weight}, label_hebrew=args.rationale_hebrew, source="chat"
         )

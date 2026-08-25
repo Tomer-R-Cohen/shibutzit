@@ -98,6 +98,14 @@ function computeAttention(metrics: GlobalMetrics, rows: ClassOverviewRow[]): Att
  * where the board (ClassWall, Milestone 2) lives. Per-class figures come
  * from /api/results/overview (class_overview_table), fetched once the
  * result exists.
+ *
+ * The bars deliberately visualize class SIZE, not the "ציון איכות" quality
+ * score -- that score is driven almost entirely by constraint violations
+ * and friendship satisfaction, so on a typical run (0 violations, no
+ * friendship data yet entered) every class scores an identical 100 and the
+ * chart shows nothing. Size genuinely varies run to run and is exactly
+ * what the size-spread attention item below is about, so the bar now
+ * supports that callout instead of contradicting it.
  */
 export function SolveResultArtifact({
   metrics,
@@ -125,9 +133,13 @@ export function SolveResultArtifact({
   }, []);
 
   const ok = metrics.violations_count === 0;
-  const avgQuality = rows && rows.length > 0 ? Math.round(rows.reduce((a, r) => a + r["ציון איכות"], 0) / rows.length) : null;
+  const hasFriendshipData = metrics.students_with_requests > 0;
   const attention = rows ? computeAttention(metrics, rows) : [];
   const highlightedClass = highlight?.kind === "class" ? highlight.id : null;
+
+  const sizes = rows?.map((r) => r["גודל"]) ?? [];
+  const sizeMin = sizes.length ? Math.min(...sizes) : 0;
+  const sizeSpan = sizes.length ? Math.max(1, Math.max(...sizes) - sizeMin) : 1;
 
   const body = (
     <>
@@ -138,21 +150,21 @@ export function SolveResultArtifact({
           </span>
           <span className="ws-metric-label">הפרות</span>
         </div>
-        {avgQuality != null && (
-          <div className="ws-metric">
-            <span className="ws-metric-value">
-              <CountUp value={avgQuality} />
-            </span>
-            <span className="ws-metric-label">איזון</span>
-          </div>
-        )}
         <div className="ws-metric">
           <span className="ws-metric-value">
-            <CountUp value={Math.round(metrics.mutual_satisfied_pct)} />%
+            <CountUp value={metrics.class_size_spread} />
           </span>
+          <span className="ws-metric-label">פער גדלים</span>
+        </div>
+        <div className="ws-metric">
+          <span className="ws-metric-value">{hasFriendshipData ? <><CountUp value={Math.round(metrics.mutual_satisfied_pct)} />%</> : "—"}</span>
           <span className="ws-metric-label">חברות</span>
         </div>
       </div>
+
+      {!hasFriendshipData && (
+        <p className="ws-artifact-note ws-artifact-note-muted">לא הוזנו בקשות חברות עבור תלמידות אלו, כך שאין מה למדוד.</p>
+      )}
 
       {rows && rows.length > 0 && (
         <div className="ws-class-bars">
@@ -174,8 +186,7 @@ export function SolveResultArtifact({
               >
                 <span className="ws-class-bar-name">{`ז'${cls}`}</span>
                 <span className="ws-class-bar-size cw-num">{r["גודל"]}</span>
-                <BalanceTrack value={r["ציון איכות"]} emphasised={isHi} />
-                <span className="ws-class-bar-value cw-num">{Math.round(r["ציון איכות"])}</span>
+                <BalanceTrack value={r["גודל"] - sizeMin} max={sizeSpan} emphasised={isHi} />
               </button>
             );
           })}
@@ -220,7 +231,7 @@ export function SolveResultArtifact({
       </div>
       <p className="ws-artifact-note">
         {metrics.total_students} תלמידות שובצו ל-{metrics.num_classes} כיתות
-        {!latest && avgQuality != null ? ` · איזון ${avgQuality}` : ""}
+        {!latest ? ` · פער גדלים ${metrics.class_size_spread}` : ""}
       </p>
 
       {/* only the newest result stays open -- older ones collapse so the

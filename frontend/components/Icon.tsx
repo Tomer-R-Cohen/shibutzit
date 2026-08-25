@@ -17,6 +17,12 @@ const PATHS: Record<string, { d: string; fill?: boolean }> = {
   send: { d: "M4.5 12 20 4l-6.5 16-2.5-7-6.5-1Z" },
   "arrow-up-right": { d: "M7 17 17 7M8 7h9v9" },
   sparkle: { d: "M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18" },
+  list: { d: "M4 6h16M4 12h16M4 18h16" },
+  grid: { d: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" },
+  users: { d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" },
+  plus: { d: "M12 5v14M5 12h14" },
+  minus: { d: "M5 12h14" },
+  sliders: { d: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h10M18 18h2M14 4v4M8 10v4M14 16v4" },
 };
 
 export type IconName = keyof typeof PATHS;
