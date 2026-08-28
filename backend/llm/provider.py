@@ -47,6 +47,12 @@ class ToolCall:
 class ChatCompletion:
     text: Optional[str]
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # The assistant turn exactly as the provider returned it, in wire shape.
+    # The agent loop has to append this verbatim before it can append the
+    # matching tool results -- an OpenAI-style conversation rejects a `tool`
+    # message that isn't preceded by the `assistant` message whose
+    # tool_call_ids it answers.
+    raw_message: dict = field(default_factory=dict)
 
 
 def _client() -> OpenAI:
@@ -84,14 +90,26 @@ def chat_completion(system_prompt: str, messages: list[dict], tools: list[dict])
     msg = response.choices[0].message
 
     tool_calls = []
+    raw_tool_calls = []
     for tc in msg.tool_calls or []:
         try:
             args = json.loads(tc.function.arguments or "{}")
         except json.JSONDecodeError:
             args = {}
         tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+        raw_tool_calls.append(
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"},
+            }
+        )
 
-    return ChatCompletion(text=msg.content, tool_calls=tool_calls)
+    raw_message: dict = {"role": "assistant", "content": msg.content}
+    if raw_tool_calls:
+        raw_message["tool_calls"] = raw_tool_calls
+
+    return ChatCompletion(text=msg.content, tool_calls=tool_calls, raw_message=raw_message)
 
 
 def text_completion(system_prompt: str, user_message: str) -> str:

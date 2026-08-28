@@ -1,6 +1,6 @@
 "use client";
 
-import { DragEvent, useCallback, useEffect, useRef, useState } from "react";
+import { DragEvent, useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import clsx from "clsx";
 import { Button } from "@/components/ui/primitives";
@@ -28,11 +28,13 @@ const DEFAULT_LOAD = { headerRow: 4, firstDataRow: 5, lastDataRow: 221 };
 export default function DatasetOnboarding({
   onReady,
   onWarning,
+  onBack,
 }: {
   onReady: (info: DatasetReadyInfo) => void;
   onWarning: (problems: string[]) => void;
+  onBack?: () => void;
 }) {
-  const [phase, setPhase] = useState<"booting" | "needsFile" | "error">("booting");
+  const [phase, setPhase] = useState<"needsFile" | "error">("needsFile");
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -60,10 +62,15 @@ export default function DatasetOnboarding({
     [onReady, onWarning]
   );
 
-  const boot = useCallback(async () => {
+  // Loading the bundled sample is now an explicit button, not something
+  // that happens on mount -- see Welcome. `ensureDataReady` is still the
+  // path it takes, because it handles the load/guess/apply sequence.
+  const loadSampleFile = useCallback(async () => {
+    setBusy(true);
     try {
       const rd = await ensureDataReady();
       if (rd.needsMapping) {
+        toast.error("קובץ ברירת המחדל דורש מיפוי עמודות ידני");
         setPhase("needsFile");
         return;
       }
@@ -71,14 +78,10 @@ export default function DatasetOnboarding({
       await finishReady(guess?.problems ?? []);
     } catch {
       setPhase("error");
+    } finally {
+      setBusy(false);
     }
   }, [finishReady]);
-
-  useEffect(() => {
-    (async () => {
-      await boot();
-    })();
-  }, [boot]);
 
   async function handleLoad(file?: File) {
     setBusy(true);
@@ -90,7 +93,7 @@ export default function DatasetOnboarding({
       setFlag("mapped", true);
       await finishReady(guess.problems);
     } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : "שגיאה בטעינת הקובץ");
+      toast.error(e instanceof ApiError ? e.message : "לא הצלחתי לטעון את הקובץ");
       setPhase("needsFile");
     } finally {
       setBusy(false);
@@ -132,17 +135,6 @@ export default function DatasetOnboarding({
     },
   };
 
-  if (phase === "booting") {
-    return (
-      <div className="ws-onboarding">
-        <div className="ws-onboarding-box">
-          <span className="ws-spinner" aria-hidden />
-          <p>טוען את רשימת התלמידות…</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="ws-onboarding" {...dragProps}>
       <input
@@ -155,18 +147,42 @@ export default function DatasetOnboarding({
           e.target.value = "";
         }}
       />
-      <div className={clsx("ws-onboarding-box", dragging && "dragging")}>
-        <Icon name="upload" size={28} />
-        <h2>{phase === "error" ? "שגיאה בטעינת הנתונים" : "טרם נטען קובץ"}</h2>
-        <p>גררו לכאן קובץ אקסל (.xlsx) עם רשימת התלמידות, או השתמשו בקובץ ברירת המחדל</p>
-        <div className="ws-onboarding-actions">
-          <Button onClick={() => fileInput.current?.click()} disabled={busy}>
-            בחירת קובץ
-          </Button>
-          <Button variant="secondary" onClick={() => void handleLoad()} disabled={busy}>
-            {busy ? "טוען…" : "טעינת קובץ ברירת המחדל"}
-          </Button>
+      {/* This is the first screen anyone ever sees, and it used to open with
+          "טרם נטען קובץ" -- a status, not an introduction. Say what the
+          product does first, then ask for the file. */}
+      <div className="ws-onboarding-inner">
+        <div className="ws-onboarding-head">
+          <h1>שיבוץ תלמידות לכיתות ז׳</h1>
+          <p>העלו את רשימת התלמידות, ואז נסחו את כללי השיבוץ בשיחה — הרכב הכיתות ייבנה סביבם.</p>
         </div>
+        <div className={clsx("ws-onboarding-box", dragging && "dragging")}>
+          <Icon name="upload" size={24} />
+          <h2>{phase === "error" ? "לא הצלחנו לטעון את הנתונים" : "גררו לכאן קובץ אקסל"}</h2>
+          <p>
+            {phase === "error"
+              ? "נסו שוב עם קובץ ‎.xlsx‎ אחר, או טענו את קובץ ברירת המחדל."
+              : "קובץ ‎.xlsx‎ עם רשימת התלמידות."}
+          </p>
+          <div className="ws-onboarding-actions">
+            <Button onClick={() => fileInput.current?.click()} disabled={busy}>
+              בחירת קובץ
+            </Button>
+            <Button variant="secondary" onClick={() => void loadSampleFile()} disabled={busy}>
+              {busy ? "טוענת…" : "שימוש בקובץ לדוגמה"}
+            </Button>
+          </div>
+        </div>
+        <p className="ws-onboarding-foot">
+          העמודות מזוהות אוטומטית, כולל עמודות ייחודיות לבית הספר שלכם.
+          {onBack && (
+            <>
+              {" · "}
+              <button type="button" className="ws-link" style={{ display: "inline" }} onClick={onBack}>
+                חזרה
+              </button>
+            </>
+          )}
+        </p>
       </div>
     </div>
   );

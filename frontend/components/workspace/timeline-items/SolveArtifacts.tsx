@@ -21,12 +21,12 @@ import { formatTime } from "./shared";
 // lie on a run that's about to come back infeasible). The last line sets
 // expectation for a long run instead of pretending to be nearly done.
 const SOLVE_PHASES = [
-  "קורא את הכללים…",
-  "בונה את מודל השיבוץ…",
-  "סורק חלוקות אפשריות…",
-  "בודק התאמה לכללים הקשיחים…",
-  "מחפש את החלוקה המאוזנת ביותר…",
-  "עדיין מחפש — הרצה מלאה יכולה לקחת עד דקה…",
+  "קוראת את הכללים…",
+  "בונה את תמונת השיבוץ…",
+  "בודקת חלוקות אפשריות…",
+  "מוודאת שכללי החובה נשמרים…",
+  "מחפשת את החלוקה המאוזנת ביותר…",
+  "עדיין מחפשת — יצירת שיבוץ מלא יכולה להימשך עד דקה…",
 ];
 
 export function SolveStartedArtifact() {
@@ -72,18 +72,18 @@ function computeAttention(metrics: GlobalMetrics, rows: ClassOverviewRow[]): Att
     });
     if (worstIdx >= 0 && worstGap >= 5) {
       const cls = rows[worstIdx]["כיתה"];
-      items.push({ text: `ז'${cls} מעט חלשה יותר באיזון הכיתה`, target: { kind: "class", id: cls } });
+      items.push({ text: `בכיתה ז׳${cls} האיזון מעט חלש יותר`, target: { kind: "class", id: cls } });
     }
   }
 
   if (metrics.unsatisfied_requests > 0) {
-    items.push({ text: `${metrics.unsatisfied_requests} בקשות חברות לא מולאו`, target: { kind: "constraints" } });
+    items.push({ text: `${metrics.unsatisfied_requests} בקשות חברות לא קיבלו מענה`, target: { kind: "constraints" } });
   }
 
   if (metrics.class_size_spread > 1) {
     const maxIdx = metrics.class_sizes.indexOf(metrics.class_size_max);
     items.push({
-      text: `ז'${maxIdx + 1} מכילה ${metrics.class_size_max} תלמידות לעומת ${metrics.class_size_min} בכיתה הקטנה ביותר`,
+      text: `בכיתה ז׳${maxIdx + 1} יש ${metrics.class_size_max} תלמידות, לעומת ${metrics.class_size_min} בכיתה הקטנה ביותר`,
       target: { kind: "class", id: maxIdx + 1 },
     });
   }
@@ -98,6 +98,14 @@ function computeAttention(metrics: GlobalMetrics, rows: ClassOverviewRow[]): Att
  * where the board (ClassWall, Milestone 2) lives. Per-class figures come
  * from /api/results/overview (class_overview_table), fetched once the
  * result exists.
+ *
+ * The bars deliberately visualize class SIZE, not the "ציון איכות" quality
+ * score -- that score is driven almost entirely by constraint violations
+ * and friendship satisfaction, so on a typical run (0 violations, no
+ * friendship data yet entered) every class scores an identical 100 and the
+ * chart shows nothing. Size genuinely varies run to run and is exactly
+ * what the size-spread attention item below is about, so the bar now
+ * supports that callout instead of contradicting it.
  */
 export function SolveResultArtifact({
   metrics,
@@ -125,9 +133,13 @@ export function SolveResultArtifact({
   }, []);
 
   const ok = metrics.violations_count === 0;
-  const avgQuality = rows && rows.length > 0 ? Math.round(rows.reduce((a, r) => a + r["ציון איכות"], 0) / rows.length) : null;
+  const hasFriendshipData = metrics.students_with_requests > 0;
   const attention = rows ? computeAttention(metrics, rows) : [];
   const highlightedClass = highlight?.kind === "class" ? highlight.id : null;
+
+  const sizes = rows?.map((r) => r["גודל"]) ?? [];
+  const sizeMin = sizes.length ? Math.min(...sizes) : 0;
+  const sizeSpan = sizes.length ? Math.max(1, Math.max(...sizes) - sizeMin) : 1;
 
   const body = (
     <>
@@ -136,23 +148,23 @@ export function SolveResultArtifact({
           <span className={`ws-metric-value ${ok ? "tone-good" : "tone-crit"}`}>
             <CountUp value={metrics.violations_count} />
           </span>
-          <span className="ws-metric-label">הפרות</span>
+          <span className="ws-metric-label">חריגות</span>
         </div>
-        {avgQuality != null && (
-          <div className="ws-metric">
-            <span className="ws-metric-value">
-              <CountUp value={avgQuality} />
-            </span>
-            <span className="ws-metric-label">איזון</span>
-          </div>
-        )}
         <div className="ws-metric">
           <span className="ws-metric-value">
-            <CountUp value={Math.round(metrics.mutual_satisfied_pct)} />%
+            <CountUp value={metrics.class_size_spread} />
           </span>
-          <span className="ws-metric-label">חברות</span>
+          <span className="ws-metric-label">פער בין הכיתות</span>
+        </div>
+        <div className="ws-metric">
+          <span className="ws-metric-value">{hasFriendshipData ? <><CountUp value={Math.round(metrics.mutual_satisfied_pct)} />%</> : "—"}</span>
+          <span className="ws-metric-label">חברות הדדית</span>
         </div>
       </div>
+
+      {!hasFriendshipData && (
+        <p className="ws-artifact-note ws-artifact-note-muted">לא הוזנו בקשות חברות, ולכן עדיין אין מה למדוד.</p>
+      )}
 
       {rows && rows.length > 0 && (
         <div className="ws-class-bars">
@@ -174,8 +186,7 @@ export function SolveResultArtifact({
               >
                 <span className="ws-class-bar-name">{`ז'${cls}`}</span>
                 <span className="ws-class-bar-size cw-num">{r["גודל"]}</span>
-                <BalanceTrack value={r["ציון איכות"]} emphasised={isHi} />
-                <span className="ws-class-bar-value cw-num">{Math.round(r["ציון איכות"])}</span>
+                <BalanceTrack value={r["גודל"] - sizeMin} max={sizeSpan} emphasised={isHi} />
               </button>
             );
           })}
@@ -184,7 +195,7 @@ export function SolveResultArtifact({
 
       {attention.length > 0 && (
         <div className="ws-attention">
-          <div className="ws-attention-title">דורש תשומת לב</div>
+          <div className="ws-attention-title">כדאי לבדוק</div>
           {attention.map((item, i) => (
             <button
               key={i}
@@ -203,10 +214,10 @@ export function SolveResultArtifact({
 
       <div className="ws-artifact-actions">
         <Button size="sm" variant="secondary" onClick={onOpenResults}>
-          פתיחת הכיתות
+          צפייה בכיתות
         </Button>
         <Button size="sm" variant="ghost" onClick={onOpenConstraints}>
-          בדיקת הכללים
+          סקירת הכללים
         </Button>
       </div>
     </>
@@ -214,14 +225,29 @@ export function SolveResultArtifact({
 
   return (
     <div className={`ws-artifact ws-breakout ${ok ? "ws-artifact-ok" : "ws-artifact-warn"}`}>
-      <div className="ws-artifact-head">
-        <Icon name={ok ? "check" : "warning"} size={15} />
-        <span>שיבוץ הושלם</span>
+      <div className="ws-result-hero">
+        <div className="ws-result-intro">
+          <span className="ws-result-icon" aria-hidden>
+            <Icon name={ok ? "check" : "warning"} size={18} />
+          </span>
+          <div>
+            <div className="ws-result-kicker">השיבוץ מוכן</div>
+            <div className="ws-result-title">{ok ? "נמצא שיבוץ מאוזן" : "השיבוץ מוכן, ויש כמה נקודות לבדיקה"}</div>
+            <p className="ws-artifact-note">
+              {metrics.total_students} תלמידות שובצו ל-{metrics.num_classes} כיתות
+              {!latest ? ` · פער גדלים ${metrics.class_size_spread}` : ""}
+            </p>
+          </div>
+        </div>
+        <div className="ws-result-range" aria-label={`טווח גודל הכיתות: ${metrics.class_size_min} עד ${metrics.class_size_max}`}>
+          <span className="cw-num">
+            {metrics.class_size_min === metrics.class_size_max
+              ? metrics.class_size_min
+              : `${metrics.class_size_min}–${metrics.class_size_max}`}
+          </span>
+          <small>תלמידות בכיתה</small>
+        </div>
       </div>
-      <p className="ws-artifact-note">
-        {metrics.total_students} תלמידות שובצו ל-{metrics.num_classes} כיתות
-        {!latest && avgQuality != null ? ` · איזון ${avgQuality}` : ""}
-      </p>
 
       {/* only the newest result stays open -- older ones collapse so the
           timeline reads as history rather than a stack of dashboards. */}
@@ -306,7 +332,7 @@ export function SolveFailureArtifact({
     return (
       <div className="ws-event">
         <Icon name="warning" size={12} />
-        <span>ניסיון שיבוץ נכשל — {conflictingIds.length || notes.length} כללים קשיחים עדיין מתנגשים</span>
+        <span>עדיין לא נמצא שיבוץ אפשרי — {conflictingIds.length || notes.length} כללי חובה מתנגשים זה בזה</span>
         <button type="button" className="ws-link" onClick={onOpenConstraints}>
           הצג פרטים
         </button>
@@ -324,7 +350,7 @@ export function SolveFailureArtifact({
         <Icon name="warning" size={15} />
         <span>לא נמצא שיבוץ אפשרי</span>
       </div>
-      {conflictingIds.length > 0 && <p className="ws-artifact-note">{conflictingIds.length} כללים קשיחים דורשים בדיקה</p>}
+      {conflictingIds.length > 0 && <p className="ws-artifact-note">{conflictingIds.length} כללי חובה מתנגשים זה בזה</p>}
       {explanation && <p className="ws-artifact-note">{explanation}</p>}
 
       {rowsAvailable && (
@@ -332,8 +358,8 @@ export function SolveFailureArtifact({
         // collapsed so a streak of retries doesn't stack identical walls.
         <ExpandableArtifact
           defaultExpanded={latest}
-          collapsedLabel="הצגת הכללים המתנגשים"
-          expandedLabel="הסתרת הכללים המתנגשים"
+          collapsedLabel="הצג את כללי החובה המתנגשים"
+          expandedLabel="הסתר את כללי החובה המתנגשים"
         >
           {conflicting!.map((c) => (
             <ConflictRow
@@ -357,11 +383,11 @@ export function SolveFailureArtifact({
 
       <div className="ws-artifact-actions">
         <Button size="sm" variant="secondary" onClick={onOpenConstraints}>
-          בדיקת הכללים
+          סקירת הכללים
         </Button>
         {rowsAvailable && (
           <Button size="sm" variant="ghost" onClick={() => onOpenConstraint(conflicting![0].id)}>
-            שינוי כלל
+            עריכת כלל
           </Button>
         )}
       </div>

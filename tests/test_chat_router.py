@@ -56,7 +56,7 @@ def test_ambiguous_name_short_circuits_without_calling_llm(client, session_heade
     first, last = dup
     message = f"{first} {last} צריכה כיתה נפרדת"
 
-    with patch("backend.routers.chat.chat_completion") as mocked:
+    with patch("backend.llm.agent.chat_completion") as mocked:
         resp = client.post("/api/chat/message", headers=session_headers, json={"message": message})
         mocked.assert_not_called()
 
@@ -71,7 +71,7 @@ def test_propose_then_confirm_adds_constraint_and_feeds_a_real_solve(client, ses
     a, b = students[0], students[1]
     message = f"{a['first_name']} {a['last_name']} ו{b['first_name']} {b['last_name']} לא יכולות להיות באותה כיתה"
 
-    with patch("backend.routers.chat.chat_completion") as mocked:
+    with patch("backend.llm.agent.chat_completion") as mocked:
         mocked.side_effect = lambda system_prompt, messages, tools: _fake_completion_from_last_message(messages)
         resp = client.post("/api/chat/message", headers=session_headers, json={"message": message})
 
@@ -106,7 +106,7 @@ def test_reject_discards_pending_proposal_without_applying(client, session_heade
 
     before = client.get("/api/constraints", headers=session_headers).json()["constraints"]
 
-    with patch("backend.routers.chat.chat_completion") as mocked:
+    with patch("backend.llm.agent.chat_completion") as mocked:
         mocked.side_effect = lambda system_prompt, messages, tools: _fake_completion_from_last_message(messages)
         client.post("/api/chat/message", headers=session_headers, json={"message": message})
 
@@ -122,7 +122,7 @@ def test_modify_constraint_toggles_hard_soft(client, session_headers):
     a, b = students[4], students[5]
     message = f"{a['first_name']} {a['last_name']} ו{b['first_name']} {b['last_name']} לא יכולות להיות באותה כיתה"
 
-    with patch("backend.routers.chat.chat_completion") as mocked:
+    with patch("backend.llm.agent.chat_completion") as mocked:
         mocked.side_effect = lambda system_prompt, messages, tools: _fake_completion_from_last_message(messages)
         client.post("/api/chat/message", headers=session_headers, json={"message": message})
     constraint_id = client.post("/api/chat/confirm", headers=session_headers).json()["result"]["id"]
@@ -139,7 +139,7 @@ def test_modify_constraint_toggles_hard_soft(client, session_headers):
             ],
         )
 
-    with patch("backend.routers.chat.chat_completion", side_effect=fake_modify):
+    with patch("backend.llm.agent.chat_completion", side_effect=fake_modify):
         resp = client.post("/api/chat/message", headers=session_headers, json={"message": "בעצם זו רק העדפה, לא חובה"})
     assert resp.json()["pending_proposal"]["kind"] == "modify"
 
@@ -152,7 +152,7 @@ def test_direct_patch_and_delete_constraint_without_chat(client, session_headers
     a, b = students[6], students[7]
     message = f"{a['first_name']} {a['last_name']} ו{b['first_name']} {b['last_name']} לא יכולות להיות באותה כיתה"
 
-    with patch("backend.routers.chat.chat_completion") as mocked:
+    with patch("backend.llm.agent.chat_completion") as mocked:
         mocked.side_effect = lambda system_prompt, messages, tools: _fake_completion_from_last_message(messages)
         client.post("/api/chat/message", headers=session_headers, json={"message": message})
     constraint_id = client.post("/api/chat/confirm", headers=session_headers).json()["result"]["id"]

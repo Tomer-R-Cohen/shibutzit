@@ -13,6 +13,7 @@ import {
   applyMapping,
   getFeasibility,
   getMappingGuess,
+  getStudents,
   getValidation,
   loadWorkbook,
 } from "@/lib/api";
@@ -49,6 +50,23 @@ async function runChecks(): Promise<{ hasErrors: boolean; allFeasible: boolean; 
     allFeasible: feasibility.all_feasible,
     studentCount: feasibility.total_students,
   };
+}
+
+/**
+ * Does this session already have usable data? Non-destructive on purpose.
+ *
+ * `ensureDataReady` below *loads the default workbook* when it finds nothing,
+ * which is why the app used to open straight onto a full roster. That is the
+ * wrong first move now: planning comes before data, and which file to use is
+ * the counselor's decision, not a default. This only asks.
+ */
+export async function probeDataReady(): Promise<boolean> {
+  try {
+    const r = await getStudents();
+    return r.rows.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export async function ensureDataReady(): Promise<DataReadiness> {

@@ -21,10 +21,13 @@ import {
   GlobalMetrics,
   OptimizeResponse,
   PendingProposal,
+  ResultState,
+  SuggestedAction,
   confirmChatProposal,
   getChatHistory,
   getConstraints,
   getResultsMetrics,
+  getResultState,
   rejectChatProposal,
   runOptimize,
   sendChatMessage,
@@ -37,8 +40,7 @@ export type InspectorState =
   | { type: "constraint"; id: string }
   | { type: "constraints" }
   | { type: "student"; id: number }
-  | { type: "result"; classId?: number }
-  | { type: "runConfig" };
+  | { type: "result"; classId?: number };
 
 export type TimelineItem =
   | { id: string; kind: "user_message"; at: number; text: string }
@@ -47,6 +49,10 @@ export type TimelineItem =
   | { id: string; kind: "data_warning"; at: number; problems: string[] }
   | { id: string; kind: "constraint_proposal"; at: number; proposal: PendingProposal; status: "pending" | "confirmed" | "rejected" }
   | { id: string; kind: "constraint_event"; at: number; action: "applied" | "modified" | "removed"; label: string }
+  // What the agent looked up before answering. Rendered as the quietest
+  // timeline tier -- it's evidence the answer came from the data, not a
+  // result in its own right.
+  | { id: string; kind: "agent_steps"; at: number; tools: string[] }
   | { id: string; kind: "solve_result"; at: number; metrics: GlobalMetrics }
   | { id: string; kind: "solve_failure"; at: number; notes: string[]; explanation?: string | null; conflictingIds: string[]; repeat: boolean }
   | { id: string; kind: "manual_move"; at: number; studentName: string; from: number; to: number }
@@ -93,6 +99,15 @@ export function useWorkspace() {
   const [sending, setSending] = useState(false);
   const [solving, setSolving] = useState(false);
   const [constraintsSummary, setConstraintsSummary] = useState<ConstraintsSummary | null>(null);
+  const [resultState, setResultState] = useState<ResultState | null>(null);
+  const [suggestions, setSuggestions] = useState<SuggestedAction[]>([]);
+  // Bumped whenever anything the inspector panels read has changed on the
+  // server: a rule confirmed, a checklist column added, the class count
+  // set from chat. Panels take it as a `refreshKey` and re-fetch. This is
+  // what makes the rules list update live instead of going stale until
+  // the user happens to navigate away and back.
+  const [dataVersion, setDataVersion] = useState(0);
+  const bumpDataVersion = useCallback(() => setDataVersion((v) => v + 1), []);
   const loadedRef = useRef(false);
 
   const append = useCallback((item: TimelineItem) => {
@@ -111,6 +126,14 @@ export function useWorkspace() {
       });
     } catch {
       // summary is a convenience for the top bar / overview -- never block on it
+    }
+  }, []);
+
+  const refreshResultState = useCallback(async () => {
+    try {
+      setResultState(await getResultState());
+    } catch {
+      // The top-bar state is helpful but must not block the workspace.
     }
   }, []);
 
@@ -133,7 +156,8 @@ export function useWorkspace() {
       // fresh session with no history yet -- fine, start empty
     }
     void refreshConstraintsSummary();
-  }, [refreshConstraintsSummary]);
+    void refreshResultState();
+  }, [refreshConstraintsSummary, refreshResultState]);
 
   useEffect(() => {
     (async () => {
@@ -149,18 +173,32 @@ export function useWorkspace() {
       setSending(true);
       try {
         const res = await sendChatMessage(trimmed);
+        // The lookups land before the answer, in the order they happened --
+        // the counselor sees the agent check the data, then speak.
+        const tools = (res.steps ?? []).filter((s) => s.ok).map((s) => s.tool);
+        if (tools.length > 0) {
+          append({ id: uid(), kind: "agent_steps", at: Date.now(), tools });
+        }
+        // A planning tool wrote to the session (checklist column, class
+        // count). Nothing else would tell the panels to re-read.
+        if (res.state_changed) {
+          bumpDataVersion();
+          void refreshConstraintsSummary();
+        }
+        if (res.result_state) setResultState(res.result_state);
+        setSuggestions(res.suggestions ?? []);
         if (res.pending_proposal) {
           append({ id: uid(), kind: "constraint_proposal", at: Date.now(), proposal: res.pending_proposal, status: "pending" });
         } else {
           append({ id: uid(), kind: "assistant_message", at: Date.now(), text: res.reply });
         }
       } catch (err) {
-        toast.error(err instanceof ApiError ? err.message : "שגיאה בשליחת ההודעה");
+        toast.error(err instanceof ApiError ? err.message : "לא הצלחתי לשלוח את ההודעה");
       } finally {
         setSending(false);
       }
     },
-    [append, sending]
+    [append, sending, bumpDataVersion, refreshConstraintsSummary]
   );
 
   const decideProposal = useCallback(
@@ -173,7 +211,9 @@ export function useWorkspace() {
             prev.map((it) => (it.id === itemId && it.kind === "constraint_proposal" ? { ...it, status: "confirmed" } : it))
           );
           append({ id: uid(), kind: "constraint_event", at: Date.now(), action: "applied", label: result?.label_hebrew ?? "הכלל עודכן" });
+          bumpDataVersion();
           void refreshConstraintsSummary();
+          void refreshResultState();
         } else {
           await rejectChatProposal();
           setTimeline((prev) =>
@@ -181,10 +221,10 @@ export function useWorkspace() {
           );
         }
       } catch (err) {
-        toast.error(err instanceof ApiError ? err.message : "שגיאה בעדכון ההצעה");
+        toast.error(err instanceof ApiError ? err.message : "לא הצלחתי לעדכן את ההצעה");
       }
     },
-    [append, refreshConstraintsSummary]
+    [append, refreshConstraintsSummary, refreshResultState, bumpDataVersion]
   );
 
   const runSolve = useCallback(async () => {
@@ -192,6 +232,7 @@ export function useWorkspace() {
     setSolving(true);
     try {
       const res: OptimizeResponse = await runOptimize();
+      if (res.result_state) setResultState(res.result_state);
       if (res.is_feasible) {
         const metrics = await getResultsMetrics();
         append({ id: uid(), kind: "solve_result", at: Date.now(), metrics });
@@ -238,7 +279,7 @@ export function useWorkspace() {
         void refreshConstraintsSummary();
       }
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "שגיאה בהרצת השיבוץ");
+      toast.error(err instanceof ApiError ? err.message : "לא הצלחתי ליצור את השיבוץ");
     } finally {
       setSolving(false);
     }
@@ -251,6 +292,20 @@ export function useWorkspace() {
   );
 
   const appendDataWarning = useCallback((problems: string[]) => append({ id: uid(), kind: "data_warning", at: Date.now(), problems }), [append]);
+
+  /**
+   * A run-parameter change logged as a rule change, which is what it
+   * actually is: the class count drives the capacity rule's bounds
+   * server-side (sync_class_size_bounds). Filing it as a `constraint_event`
+   * gets it both a line in the activity log and -- because that is exactly
+   * what the top bar's staleness check looks for -- an honest "the rules
+   * moved since this result" state. Editing the class count on the main
+   * surface without that would silently invalidate the result on screen.
+   */
+  const appendRunConfigChange = useCallback(
+    (label: string) => append({ id: uid(), kind: "constraint_event", at: Date.now(), action: "modified", label }),
+    [append]
+  );
 
   const appendManualMove = useCallback(
     (studentName: string, from: number, to: number) => append({ id: uid(), kind: "manual_move", at: Date.now(), studentName, from, to }),
@@ -274,7 +329,12 @@ export function useWorkspace() {
     sending,
     solving,
     constraintsSummary,
+    resultState,
+    suggestions,
     refreshConstraintsSummary,
+    refreshResultState,
+    dataVersion,
+    bumpDataVersion,
     sendMessage,
     decideProposal,
     runSolve,
@@ -282,6 +342,7 @@ export function useWorkspace() {
     appendDataWarning,
     appendManualMove,
     appendReoptimization,
+    appendRunConfigChange,
   };
 }
 

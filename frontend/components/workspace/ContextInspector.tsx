@@ -1,15 +1,18 @@
 "use client";
 
+import clsx from "clsx";
 import { ConstraintsSummary, Highlight, InspectorState, Workspace } from "@/lib/workspace";
 import OverviewInspector from "./inspector/OverviewInspector";
 import ConstraintBrowser from "./inspector/ConstraintBrowser";
 import ConstraintInspector from "./inspector/ConstraintInspector";
-import RunConfigInspector from "./inspector/RunConfigInspector";
 
 // Only these fields are needed here -- narrower than the full Workspace
 // hook so fixture previews can pass a lightweight local stand-in without
 // wiring up the rest of useWorkspace()'s real-API surface.
-export type ContextInspectorWorkspace = Pick<Workspace, "inspector" | "setInspector" | "refreshConstraintsSummary"> & {
+export type ContextInspectorWorkspace = Pick<
+  Workspace,
+  "inspector" | "setInspector" | "refreshConstraintsSummary" | "refreshResultState" | "appendRunConfigChange" | "dataVersion" | "bumpDataVersion"
+> & {
   constraintsSummary: ConstraintsSummary | null;
 };
 
@@ -26,14 +29,18 @@ export default function ContextInspector({
   onOpenRoster,
   highlight,
   onHighlight,
+  sheetOpen,
 }: {
   workspace: ContextInspectorWorkspace;
   studentCount: number | null;
   onOpenRoster?: () => void;
   highlight?: Highlight;
   onHighlight?: (h: Highlight) => void;
+  /** Only meaningful below 900px, where the pane is a sheet rather than a column. */
+  sheetOpen?: boolean;
 }) {
-  const { inspector, setInspector, constraintsSummary, refreshConstraintsSummary } = workspace;
+  const { inspector, setInspector, constraintsSummary, refreshConstraintsSummary, refreshResultState, appendRunConfigChange, dataVersion, bumpDataVersion } =
+    workspace;
 
   function open(state: InspectorState) {
     setInspector(state);
@@ -48,6 +55,7 @@ export default function ContextInspector({
           <ConstraintBrowser
             onSelect={(id) => open({ type: "constraint", id })}
             onBack={() => open({ type: "overview" })}
+            refreshKey={dataVersion}
             highlight={highlight ?? null}
             onHighlight={onHighlight}
           />
@@ -57,12 +65,14 @@ export default function ContextInspector({
           <ConstraintInspector
             id={inspector.id}
             onBack={() => open({ type: "constraints" })}
-            onChanged={() => void refreshConstraintsSummary()}
+            onChanged={() => {
+              bumpDataVersion();
+              void refreshConstraintsSummary();
+              void refreshResultState();
+            }}
             onRemoved={() => open({ type: "constraints" })}
           />
         );
-      case "runConfig":
-        return <RunConfigInspector onBack={() => open({ type: "overview" })} />;
       default:
         return (
           <OverviewInspector
@@ -70,14 +80,21 @@ export default function ContextInspector({
             constraintsSummary={constraintsSummary}
             onOpenConstraints={() => open({ type: "constraints" })}
             onOpenRoster={onOpenRoster}
-            onOpenRunConfig={() => open({ type: "runConfig" })}
+            onConstraintsChanged={() => {
+              bumpDataVersion();
+              void refreshConstraintsSummary();
+              void refreshResultState();
+            }}
+            onRunConfigChange={appendRunConfigChange}
+            refreshKey={dataVersion}
+            hasDataset={studentCount != null}
           />
         );
     }
   }
 
   return (
-    <aside className="ws-inspector">
+    <aside id="ws-inspector" className={clsx("ws-inspector", sheetOpen && "open")}>
       <div key={modeKey} className="ws-insp-mode">
         {content()}
       </div>

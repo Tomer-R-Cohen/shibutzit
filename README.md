@@ -5,10 +5,10 @@ classes under hard and soft constraints, using Google OR-Tools CP-SAT.
 
 The core logic lives in `src/` and is exposed through a single UI:
 
-- **Next.js frontend + FastAPI backend** — an RTL Hebrew, one-screen app
-  built for teachers and principals. It opens straight on the assignment
-  screen with the data already loaded, mapped and validated, so the common
-  path is a single click: **הפקת שיבוץ** ("generate assignment").
+- **Next.js frontend + FastAPI backend** — an RTL Hebrew conversational
+  workspace for teachers and principals. A new session starts with a choice:
+  plan the rules and required columns with the assistant, or upload a roster
+  and proceed to validation, solving, inspection, manual adjustment, and export.
 
 > An earlier Streamlit prototype (`app.py`) was retired in favor of this
 > UI. `src/` is unchanged and remains the single source of truth for all

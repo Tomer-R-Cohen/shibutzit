@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import tempfile
 import threading
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Optional
@@ -25,6 +26,8 @@ import pandas as pd
 
 from src.column_mapping import ColumnMapping
 from src.constraints import Constraint
+from src.data_requirements import DataRequirement
+from src.dataset_schema import DatasetSchema, ExtraColumn
 from src.excel_loader import LoadedWorkbook
 from src.friendship_graph import NameResolutionResult
 from src.manual_adjustments import AdjustmentState
@@ -75,9 +78,53 @@ class Session:
     opt_result: Optional[OptimizationResult] = None
     adjustment_state: Optional[AdjustmentState] = None
     constraints: list[Constraint] = field(default_factory=list)
+    # Columns this workbook has that the app doesn't know by name. Detected
+    # at mapping time; what makes rules about arbitrary spreadsheet columns
+    # possible. See src/dataset_schema.py.
+    dataset_schema: DatasetSchema = field(default_factory=DatasetSchema)
+    # Columns the counselor agreed to add to the workbook, recorded during
+    # planning -- before any file exists. See src/data_requirements.py.
+    data_requirements: list[DataRequirement] = field(default_factory=list)
     chat_history: list[dict] = field(default_factory=list)
     pending_proposal: Optional[PendingProposal] = None
     token_map: TokenMap = field(default_factory=TokenMap)
+    # Monotonic version of every input that can affect the solver. A
+    # successful solve records the exact version it consumed. This makes
+    # result freshness authoritative on the server instead of inferred from
+    # an ephemeral browser timeline.
+    input_revision: int = 0
+    solve_revision: Optional[int] = None
+    result_mode: Literal["solver", "manual"] = "solver"
+
+    def mark_inputs_changed(self, *, data_changed: bool = False, clear_result: bool = False) -> None:
+        self.input_revision += 1
+        self.feasibility_report = None
+        if data_changed:
+            self.validation_report = None
+            self.friendship_result = None
+            self.unmatched_df = None
+        if clear_result:
+            self.opt_result = None
+            self.adjustment_state = None
+            self.solve_revision = None
+            self.result_mode = "solver"
+
+    def mark_solved(self) -> None:
+        self.solve_revision = self.input_revision
+        self.result_mode = "solver"
+
+    def mark_manually_adjusted(self) -> None:
+        self.result_mode = "manual"
+
+    def result_state(self) -> dict:
+        has_result = bool(self.opt_result is not None and self.opt_result.is_feasible and self.adjustment_state is not None)
+        return {
+            "has_result": has_result,
+            "is_stale": has_result and self.solve_revision != self.input_revision,
+            "input_revision": self.input_revision,
+            "solve_revision": self.solve_revision,
+            "result_mode": self.result_mode if has_result else None,
+        }
 
 
 class SessionStore:
@@ -130,20 +177,40 @@ class SessionStore:
                 else None
             ),
             "constraints": [asdict(c) for c in sess.constraints],
+            "dataset_schema": sess.dataset_schema.to_dicts() if sess.dataset_schema else [],
+            "data_requirements": [
+                {"id": r.id, "label": r.label, "kind": r.kind, "reason": r.reason, "values": list(r.values)}
+                for r in sess.data_requirements
+            ],
             "chat_history": sess.chat_history,
             "pending_proposal": asdict(sess.pending_proposal) if sess.pending_proposal else None,
             "token_map": {
                 "id_to_token": sess.token_map.id_to_token,
                 "token_to_id": sess.token_map.token_to_id,
             },
+            "input_revision": sess.input_revision,
+            "solve_revision": sess.solve_revision,
+            "result_mode": sess.result_mode,
         }
         try:
             with self._lock:
-                with open(self._path(sess.id), "wb") as f:
+                target = self._path(sess.id)
+                # Write beside the target and atomically replace it. A crash
+                # or power loss can no longer leave a half-written pickle
+                # that silently discards the counselor's saved inputs.
+                fd, tmp_path = tempfile.mkstemp(prefix=".session-", suffix=".tmp", dir=PERSIST_DIR)
+                with os.fdopen(fd, "wb") as f:
                     pickle.dump(payload, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, target)
         except Exception:
             # Persistence is a convenience, not a correctness requirement.
-            pass
+            try:
+                if "tmp_path" in locals() and os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
 
     def _restore(self, sess: Session) -> None:
         """Load persisted inputs into a freshly-created session. Called while
@@ -159,6 +226,13 @@ class SessionStore:
 
         rc = payload.get("run_config")
         if rc:
+            # The search budget used to default to 30s and was only reachable
+            # from a sub-view nobody opened, so a stored 30.0 is the old
+            # default rather than a choice anyone made. Carry such sessions
+            # onto the new 60s default; any other value was deliberate and is
+            # left alone.
+            if rc.get("time_limit_seconds") == 30.0:
+                rc = {**rc, "time_limit_seconds": 60.0}
             try:
                 sess.run_config = SolverConfig(**rc)
             except Exception:
@@ -193,6 +267,20 @@ class SessionStore:
             except Exception:
                 pass
 
+        raw_schema = payload.get("dataset_schema")
+        if raw_schema:
+            try:
+                sess.dataset_schema = DatasetSchema(extras=[ExtraColumn(**c) for c in raw_schema])
+            except Exception:
+                pass
+
+        raw_reqs = payload.get("data_requirements")
+        if raw_reqs:
+            try:
+                sess.data_requirements = [DataRequirement(**r) for r in raw_reqs]
+            except Exception:
+                pass
+
         chat_history = payload.get("chat_history")
         if chat_history:
             sess.chat_history = chat_history
@@ -210,6 +298,15 @@ class SessionStore:
                 id_to_token=tm.get("id_to_token", {}),
                 token_to_id=tm.get("token_to_id", {}),
             )
+
+        try:
+            sess.input_revision = max(0, int(payload.get("input_revision", 0)))
+            raw_solve_revision = payload.get("solve_revision")
+            sess.solve_revision = int(raw_solve_revision) if raw_solve_revision is not None else None
+            mode = payload.get("result_mode", "solver")
+            sess.result_mode = mode if mode in ("solver", "manual") else "solver"
+        except (TypeError, ValueError):
+            pass
 
 
 store = SessionStore()

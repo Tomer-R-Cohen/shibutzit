@@ -38,7 +38,11 @@ class SolverConfig:
     denominator_all_students: bool = True  # else only students with requests
     mutual_target_pct: float = 80.0
     two_friends_target_pct: float = 70.0
-    time_limit_seconds: float = 30.0
+    time_limit_seconds: float = 60.0
+    # Not user-editable, and deliberately so: the seed exists to keep solves
+    # reproducible (see the num_search_workers note in optimize()), not as a
+    # dial anyone should turn. Changing it only reshuffles which of several
+    # equally-good assignments you get, which reads as the app being random.
     random_seed: int = 42
 
 

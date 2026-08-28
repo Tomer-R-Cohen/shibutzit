@@ -36,7 +36,9 @@ class RunConfigModel(BaseModel):
     denominator_all_students: bool = True
     mutual_target_pct: float = 80.0
     two_friends_target_pct: float = 70.0
-    time_limit_seconds: float = 30.0
+    time_limit_seconds: float = 60.0
+    # Accepted so an existing client can round-trip the object it was given,
+    # but never surfaced in the UI -- see SolverConfig.random_seed.
     random_seed: int = 42
 
 

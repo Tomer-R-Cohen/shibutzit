@@ -52,7 +52,7 @@ export function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
   return (
     <div>
       <input
-        placeholder="חיפוש..."
+        placeholder="חיפוש"
         value={globalFilter}
         onChange={(e) => table.setGlobalFilter(e.target.value)}
         className="mb-3 w-full max-w-xs border-b border-[var(--cw-line)] bg-transparent px-1 py-1.5 text-sm focus:border-[var(--cw-accent)] focus:outline-none"

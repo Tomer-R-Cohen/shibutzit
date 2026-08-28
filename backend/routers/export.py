@@ -2,12 +2,27 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header, HTTPException, Response
 
-from src.export_excel import export_to_excel
+from src.export_excel import export_template_excel, export_to_excel
 
 from ..session_store import store
 from ..solver_inputs import build_solver_inputs
 
 router = APIRouter()
+
+
+@router.get("/api/export-template.xlsx")
+def export_template_xlsx(x_session_id: str = Header(...)):
+    """The fill-in workbook: base fields plus one column per rule discussed
+    in chat that still needs data behind it. Works with or without a
+    workbook already loaded -- see export_template_excel."""
+    sess = store.get_or_create(x_session_id)
+    raw_df = sess.loaded_wb.raw_df if sess.loaded_wb else None
+    data = export_template_excel(raw_df, sess.data_requirements, sess.dataset_schema)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=shibutz_tavnit.xlsx"},
+    )
 
 
 @router.get("/api/export.xlsx")

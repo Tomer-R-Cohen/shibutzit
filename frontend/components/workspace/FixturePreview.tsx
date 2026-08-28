@@ -49,6 +49,10 @@ export default function FixturePreview({ fixture }: { fixture: Fixture }) {
     setInspector,
     constraintsSummary: fixture.constraintsSummary,
     refreshConstraintsSummary: async () => {},
+    refreshResultState: async () => {},
+    appendRunConfigChange: () => {},
+    dataVersion: 0,
+    bumpDataVersion: () => {},
   };
 
   return (
@@ -56,9 +60,8 @@ export default function FixturePreview({ fixture }: { fixture: Fixture }) {
       topBar={
         <TopBar
           onRunSolve={() => {}}
-          solving={false}
           canSolve={fixture.studentCount != null}
-          hasResult={timeline.some((item) => item.kind === "solve_result")}
+          runState={timeline.some((item) => item.kind === "solve_result") ? "fresh" : "none"}
         />
       }
       conversation={
@@ -67,6 +70,7 @@ export default function FixturePreview({ fixture }: { fixture: Fixture }) {
           sending={false}
           solving={false}
           deciding={deciding}
+          studentCount={fixture.studentCount}
           onSend={() => {}}
           onConfirmProposal={(id) => decideProposal(id, "confirm")}
           onRejectProposal={(id) => decideProposal(id, "reject")}
@@ -75,7 +79,10 @@ export default function FixturePreview({ fixture }: { fixture: Fixture }) {
           onOpenConstraints={() => setInspector({ type: "constraints" })}
           onOpenConstraint={(id) => setInspector({ type: "constraint", id })}
           composerPlaceholder="הוסיפו כלל או בקשו שינוי..."
-          composerSuggestions={["בדוק בקשות חברות", "שפר איזון לימודי"]}
+          composerSuggestions={[
+            { label: "בדוק בקשות חברות", message: "בדוק את המענה לבקשות החברות בשיבוץ." },
+            { label: "שיפור האיזון הלימודי", message: "בדקי איך אפשר לשפר את האיזון הלימודי." },
+          ]}
           highlight={highlight}
           onHighlight={setHighlight}
           onAttentionTarget={(t) => {

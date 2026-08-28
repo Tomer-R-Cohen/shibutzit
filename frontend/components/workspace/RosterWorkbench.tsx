@@ -49,7 +49,7 @@ export default function RosterWorkbench({ open, onClose }: { open: boolean; onCl
       setError(null);
       getStudents()
         .then((r) => setStudents(r.rows))
-        .catch((e) => setError(e instanceof ApiError ? e.message : "שגיאה בטעינת רשימת התלמידות"))
+        .catch((e) => setError(e instanceof ApiError ? e.message : "לא הצלחנו לטעון את רשימת התלמידות"))
         .finally(() => setLoading(false));
     })();
     return () => clearTimeout(saveTimer.current);
@@ -71,7 +71,7 @@ export default function RosterWorkbench({ open, onClose }: { open: boolean; onCl
         setSaveState("saved");
       } catch (e) {
         setSaveState("idle");
-        toast.error(e instanceof ApiError ? e.message : "שגיאה בשמירה");
+        toast.error(e instanceof ApiError ? e.message : "לא הצלחתי לשמור את השינויים");
       }
     }, 700);
   }
@@ -111,7 +111,7 @@ export default function RosterWorkbench({ open, onClose }: { open: boolean; onCl
           </div>
           <div className="dp-spacer" />
           <span className="dp-save" aria-live="polite" style={saveState === "saved" ? { color: "var(--cw-good)" } : undefined}>
-            {saveState === "saving" ? "שומר…" : saveState === "saved" ? "✓ נשמר" : ""}
+            {saveState === "saving" ? "שומרת…" : saveState === "saved" ? "✓ נשמר" : ""}
           </span>
         </div>
 
@@ -168,7 +168,7 @@ export default function RosterWorkbench({ open, onClose }: { open: boolean; onCl
                     <tr className="dp-grp">
                       <th colSpan={6}>פרטי התלמידה · מהקובץ</th>
                       <th colSpan={4} className="manual edcol edstart">
-                        הזנה ידנית · מלאו כאן
+                        פרטים להשלמה ידנית
                       </th>
                     </tr>
                     <tr className="dp-cols">
@@ -238,7 +238,7 @@ export default function RosterWorkbench({ open, onClose }: { open: boolean; onCl
                               className="dp-friends"
                               aria-label={`בקשות חברות — ${fullName(s)}`}
                               value={(s.friend_requests_raw as string) ?? ""}
-                              placeholder="שמות, מופרד בפסיקים"
+                              placeholder="שמות, מופרדים בפסיקים"
                               onChange={(e) => patch(s.student_id, "friend_requests_raw", e.target.value)}
                             />
                           </td>

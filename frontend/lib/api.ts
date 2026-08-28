@@ -205,14 +205,31 @@ export function getFeasibility() {
 
 // ---- Step 6: run parameters ----
 // Every actual rule (including the built-in defaults) lives in the
-// constraint list below -- this is just num_classes / time limit / seed.
+// constraint list below -- this is just num_classes and the time budget.
 export interface RunConfig {
   num_classes: number;
   denominator_all_students: boolean;
   mutual_target_pct: number;
   two_friends_target_pct: number;
   time_limit_seconds: number;
+  /**
+   * Round-tripped, never rendered and never edited. The seed exists so that
+   * identical inputs produce an identical assignment; exposing it would only
+   * let a user reshuffle between equally-good answers, which reads as the
+   * app being unreliable. `setRunConfig` PUTs the whole object back, so the
+   * field has to survive the trip -- it just has no UI.
+   */
   random_seed: number;
+}
+export interface ResultState {
+  has_result: boolean;
+  is_stale: boolean;
+  input_revision: number;
+  solve_revision: number | null;
+  result_mode: "solver" | "manual" | null;
+}
+export function getResultState() {
+  return request<ResultState>("/api/result-state");
 }
 export function getRunConfig() {
   return request<RunConfig>("/api/run-config");
@@ -255,15 +272,59 @@ export interface PendingProposal {
   target_constraint_id?: string | null;
   changes?: Record<string, unknown> | null;
 }
+/** One read tool the agent ran while working on a turn. Reads execute
+ *  immediately server-side; only writes come back as a proposal. */
+export interface AgentStep {
+  tool: string;
+  ok: boolean;
+}
+export interface SuggestedAction {
+  label: string;
+  message: string;
+}
 export function getChatHistory() {
   return request<{ messages: ChatMessage[]; pending_proposal: PendingProposal | null }>("/api/chat/history");
 }
 export function sendChatMessage(message: string) {
-  return request<{ reply: string; pending_proposal: PendingProposal | null }>("/api/chat/message", {
+  return request<{
+    reply: string;
+    pending_proposal: PendingProposal | null;
+    steps?: AgentStep[];
+    /** A planning tool changed persisted state, so the panels are stale. */
+    state_changed?: boolean;
+    suggestions?: SuggestedAction[];
+    result_state?: ResultState;
+  }>("/api/chat/message", {
     method: "POST",
     body: JSON.stringify({ message }),
   });
 }
+/** One column the counselor agreed to add to the workbook, from planning. */
+export interface DataRequirement {
+  id: string;
+  label: string;
+  kind: "flag" | "category" | "number";
+  kind_label: string;
+  how_to_fill: string;
+  reason: string;
+  values: string[];
+  satisfied: boolean;
+  column_key: string | null;
+}
+export interface DataRequirementsResponse {
+  requirements: DataRequirement[];
+  total: number;
+  satisfied: number;
+  missing: number;
+  has_dataset: boolean;
+}
+export function getDataRequirements() {
+  return request<DataRequirementsResponse>("/api/data-requirements");
+}
+export function deleteDataRequirement(id: string) {
+  return request<{ removed: boolean }>(`/api/data-requirements/${id}`, { method: "DELETE" });
+}
+
 export function confirmChatProposal() {
   return request<{ applied: boolean; result: unknown }>("/api/chat/confirm", { method: "POST" });
 }
@@ -294,6 +355,7 @@ export interface OptimizeResponse {
   relaxation_proposal?: PendingProposal | null;
   // Short LLM read of a successful result; null when no LLM is configured.
   result_comment?: string | null;
+  result_state?: ResultState;
 }
 export function runOptimize() {
   return request<OptimizeResponse>("/api/optimize", { method: "POST" });
@@ -337,6 +399,9 @@ export interface GlobalMetrics {
   partial_requests: number;
   unsatisfied_requests: number;
   violations_count: number;
+  // 0 means no friendship data exists for this run -- mutual_satisfied_pct
+  // being 0 in that case means "no data", not "every request failed".
+  students_with_requests: number;
   solver_status: string;
   solver_wall_time: number;
   objective_value: number | null;
@@ -371,6 +436,25 @@ export function exportXlsxUrl() {
 export async function fetchExportBlob(): Promise<Blob> {
   const sid = getSessionId();
   const res = await fetch(`${API_BASE}/api/export.xlsx`, { headers: { "X-Session-Id": sid } });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const j = await res.json();
+      detail = j.detail ?? detail;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return res.blob();
+}
+
+// The fill-in template: base fields plus whatever columns the planning
+// conversation has since decided the workbook needs -- see
+// RequirementsCard, which is the only place this is downloaded from.
+export async function fetchTemplateBlob(): Promise<Blob> {
+  const sid = getSessionId();
+  const res = await fetch(`${API_BASE}/api/export-template.xlsx`, { headers: { "X-Session-Id": sid } });
   if (!res.ok) {
     let detail = res.statusText;
     try {

@@ -54,7 +54,7 @@ export function ConstraintProposalArtifact({
   }
 
   const typeLabel = proposal.constraint ? (TYPE_LABELS[proposal.constraint.type] ?? proposal.constraint.type) : null;
-  const severity = proposal.constraint ? (proposal.constraint.hard ? "דרישה קשיחה" : "העדפה") : null;
+  const severity = proposal.constraint ? (proposal.constraint.hard ? "כלל חובה" : "כלל מועדף") : null;
 
   return (
     <div className="ws-proposal">
@@ -71,10 +71,10 @@ export function ConstraintProposalArtifact({
       <p className="ws-proposal-text">{proposal.summary_hebrew}</p>
       <div className="ws-proposal-actions">
         <Button size="sm" variant="secondary" onClick={onReject} disabled={deciding}>
-          דחייה
+          לא הפעם
         </Button>
         <Button size="sm" onClick={onConfirm} disabled={deciding}>
-          {deciding ? "מבצע…" : "אישור והוספה"}
+          {deciding ? "מעדכנת…" : "אישור ההצעה"}
         </Button>
       </div>
     </div>

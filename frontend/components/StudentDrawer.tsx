@@ -64,19 +64,23 @@ export function StudentDrawer({
 
         {/* Social placement summary */}
         <div className="flex flex-col gap-2 py-4">
-          <h4 className="text-xs font-semibold text-[var(--cw-ink-2)]">מיקום חברתי</h4>
+          <h4 className="text-xs font-semibold text-[var(--cw-ink-2)]">בקשות חברות</h4>
           <ul className="flex flex-col gap-1.5 text-xs text-[var(--cw-ink-2)]">
             <li>
-              בקשות חברות שהוגשו: <span className="font-medium text-[var(--cw-ink)]">{requested}</span>
+              בקשות שהוזנו: <span className="font-medium text-[var(--cw-ink)]">{requested}</span>
             </li>
             <li>
-              מומשו באותה כיתה: <span className="font-medium text-[var(--cw-ink)]">{satisfiedInClass}</span>
+              קיבלו מענה בכיתה: <span className="font-medium text-[var(--cw-ink)]">{satisfiedInClass}</span>
             </li>
             {mutualInClass > 0 && (
-              <li className="text-[var(--cw-accent-strong)]">בקשה הדדית אחת לפחות מומשה בכיתה זו</li>
+              <li className="text-[var(--cw-accent-strong)]">לפחות בקשה הדדית אחת קיבלה מענה</li>
             )}
-            {elsewhere > 0 && <li className="text-[var(--cw-warn)]">{elsewhere} בקשה/ות שובצו בכיתה אחרת</li>}
-            {requested === 0 && <li className="text-[var(--cw-ink-3)]">לא נמצאו בקשות חברות עבור תלמידה זו</li>}
+            {elsewhere > 0 && (
+              <li className="text-[var(--cw-warn)]">
+                {elsewhere === 1 ? "בקשה אחת לא קיבלה מענה" : `${elsewhere} בקשות לא קיבלו מענה`}
+              </li>
+            )}
+            {requested === 0 && <li className="text-[var(--cw-ink-3)]">לא הוזנו בקשות חברות לתלמידה הזאת</li>}
           </ul>
         </div>
 
@@ -98,7 +102,7 @@ export function StudentDrawer({
             </div>
           ) : (
             <div className="flex flex-col gap-2 border-s-2 border-[var(--cw-accent)] ps-3 text-xs">
-              <div className={clsx("font-medium", "text-[var(--cw-ink)]")}>תצוגה מקדימה של השפעה</div>
+              <div className={clsx("font-medium", "text-[var(--cw-ink)]")}>כך ייראו גדלי הכיתות</div>
               <div>
                 כיתה {pendingClass}: {sizeOf(pendingClass)} → {sizeOf(pendingClass) + 1} תלמידות
               </div>
@@ -113,7 +117,7 @@ export function StudentDrawer({
                     setPendingClass(null);
                   }}
                 >
-                  אשר מעבר
+                  העברה לכיתה {pendingClass}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setPendingClass(null)}>
                   ביטול
@@ -125,7 +129,7 @@ export function StudentDrawer({
 
         <div className="pt-4">
           <Button size="sm" variant={student["נעולה"] ? "danger" : "secondary"} onClick={onLockToggle}>
-            {student["נעולה"] ? "בטל נעילה" : "נעל תלמידה לכיתה הנוכחית"}
+            {student["נעולה"] ? "ביטול הקיבוע" : "קיבוע בכיתה הנוכחית"}
           </Button>
         </div>
       </div>

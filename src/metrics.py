@@ -37,6 +37,12 @@ class GlobalMetrics:
     partial_requests: int
     unsatisfied_requests: int
     violations_count: int
+    # How many students submitted at least one friend request at all --
+    # distinguishes "0% satisfied because no one asked" (this is 0) from
+    # "0% satisfied because every request failed" (this is > 0). Callers
+    # must not read mutual_satisfied_pct as a quality signal without
+    # checking this first.
+    students_with_requests: int = 0
     solver_status: str = ""
     solver_wall_time: float = 0.0
     objective_value: Optional[float] = None
@@ -199,6 +205,7 @@ def compute_global_metrics(
     satisfied = partial = unsatisfied = 0
     mutual_hits = two_hits = 0
     denom_students = 0
+    students_with_requests = 0
 
     for _, row in df.iterrows():
         sid = row[FIELD_STUDENT_ID]
@@ -208,6 +215,7 @@ def compute_global_metrics(
             denom_students += 1
         if not has_requests:
             continue
+        students_with_requests += 1
         cls = assignment.get(sid)
         same = [r for r in requested if assignment.get(r) == cls]
         mutual = [r for r in same if sid in friendship_matched.get(r, [])]
@@ -241,6 +249,7 @@ def compute_global_metrics(
         partial_requests=partial,
         unsatisfied_requests=unsatisfied,
         violations_count=violations_count,
+        students_with_requests=students_with_requests,
         solver_status=solver_status,
         solver_wall_time=solver_wall_time,
         objective_value=objective_value,

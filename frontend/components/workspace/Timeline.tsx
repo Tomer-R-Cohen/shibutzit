@@ -6,7 +6,7 @@ import { DataWarningArtifact, DatasetReadyArtifact } from "./timeline-items/Data
 import { ConstraintProposalArtifact } from "./timeline-items/ConstraintProposalArtifact";
 import { ConstraintEvent } from "./timeline-items/ConstraintEvent";
 import { SolveFailureArtifact, SolveResultArtifact, SolveStartedArtifact } from "./timeline-items/SolveArtifacts";
-import { ManualMoveEvent, ReoptimizationEvent } from "./timeline-items/ActivityEvents";
+import { AgentStepsEvent, ManualMoveEvent, ReoptimizationEvent } from "./timeline-items/ActivityEvents";
 
 /**
  * Renders TimelineItem[] to dedicated components -- no arbitrary markup,
@@ -83,6 +83,8 @@ export default function Timeline({
             );
           case "constraint_event":
             return <ConstraintEvent key={item.id} action={item.action} label={item.label} at={item.at} />;
+          case "agent_steps":
+            return <AgentStepsEvent key={item.id} tools={item.tools} at={item.at} />;
           case "solve_result":
             return (
               <SolveResultArtifact

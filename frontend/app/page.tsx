@@ -2,15 +2,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 import WorkspaceShell from "@/components/workspace/WorkspaceShell";
-import TopBar from "@/components/workspace/TopBar";
+import TopBar, { RunState } from "@/components/workspace/TopBar";
 import Conversation from "@/components/workspace/Conversation";
 import ContextInspector from "@/components/workspace/ContextInspector";
 import DatasetOnboarding, { DatasetReadyInfo } from "@/components/workspace/DatasetOnboarding";
+import Welcome from "@/components/workspace/Welcome";
 import FixturePreview from "@/components/workspace/FixturePreview";
 import RosterWorkbench from "@/components/workspace/RosterWorkbench";
 import ResultsBoard from "@/components/workspace/ResultsBoard";
+import ConfirmDialog from "@/components/ui/ConfirmDialog";
+import { getStudents, resetSession } from "@/lib/api";
+import type { SuggestedAction } from "@/lib/api";
 import { FIXTURES } from "@/lib/fixtures";
 import { AttentionTarget, useWorkspace } from "@/lib/workspace";
+import { probeDataReady } from "@/lib/bootstrap";
+import { resetFlags } from "@/lib/steps";
 
 // The whole app is one workspace: TopBar for orientation, a dominant
 // conversation/timeline on the right (RTL inline-start), and a contextual
@@ -44,6 +50,9 @@ export default function Home() {
     workbench,
     setWorkbench,
     refreshConstraintsSummary,
+    refreshResultState,
+    resultState,
+    suggestions,
     decideProposal,
     sendMessage,
     runSolve,
@@ -51,13 +60,23 @@ export default function Home() {
     appendDataWarning,
   } = workspace;
   const [datasetReady, setDatasetReady] = useState(false);
+  // welcome -> (plan | upload) -> workspace. The app used to auto-load the
+  // bundled sample on mount, which meant it opened onto someone else's data
+  // and there was no moment at which the counselor decided anything. A
+  // session that already has data skips straight to the workspace.
+  const [phase, setPhase] = useState<"booting" | "welcome" | "upload" | "workspace">("booting");
   const [studentCount, setStudentCount] = useState<number | null>(null);
   const [deciding, setDeciding] = useState(false);
+  // Only consulted below the 900px breakpoint, where the inspector stops
+  // being a second column and becomes a dismissible sheet.
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [confirmingReset, setConfirmingReset] = useState(false);
 
   const handleReady = useCallback(
     (info: DatasetReadyInfo) => {
       setStudentCount(info.studentCount);
       setDatasetReady(true);
+      setPhase("workspace");
       appendDatasetReady(info.studentCount, info.schoolCount, info.levelCount, info.warningCount, info.levelCounts);
       // Default constraints are seeded server-side once a dataset exists, so
       // the summary fetched at mount (before any dataset was loaded) is
@@ -68,6 +87,41 @@ export default function Home() {
   );
 
   const handleWarning = useCallback((problems: string[]) => appendDataWarning(problems), [appendDataWarning]);
+
+  useEffect(() => {
+    (async () => {
+      const ready = await probeDataReady();
+      if (!ready) {
+        setPhase("welcome");
+        return;
+      }
+      // Returning to a session that already has a roster: rebuild the
+      // student count without re-announcing the dataset in the timeline,
+      // which the chat history already carries.
+      try {
+        const st = await getStudents();
+        setStudentCount(st.rows.length);
+        setDatasetReady(true);
+      } catch {
+        /* fall through to the workspace anyway; panels handle their own errors */
+      }
+      setPhase("workspace");
+    })();
+  }, []);
+
+  // A full reload rather than resetting React state piece by piece: a new
+  // session id means every panel's cached fetch is stale, and there are
+  // enough of them now that missing one would leave the old roster's
+  // numbers on screen under a fresh session.
+  async function handleStartOver() {
+    try {
+      await resetSession();
+    } catch {
+      /* a new local id is enough; the backend creates the session lazily */
+    }
+    resetFlags();
+    window.location.reload();
+  }
 
   async function handleConfirmProposal(id: string) {
     setDeciding(true);
@@ -117,24 +171,69 @@ export default function Home() {
     }
   }
 
-  const hasResult = timeline.some((item) => item.kind === "solve_result");
+  // The backend owns freshness through input/solve revisions. Timeline
+  // events are narrative only and cannot make an old result look current.
+  const lastResultIdx = timeline.map((i) => i.kind).lastIndexOf("solve_result");
+  const hasResult = lastResultIdx >= 0;
+  const runState: RunState = solving
+    ? "solving"
+    : !resultState?.has_result
+      ? "none"
+      : resultState.is_stale
+        ? "stale"
+        : resultState.result_mode === "manual"
+          ? "adjusted"
+          : "fresh";
+
   const lastFailed = [...timeline].reverse().find((i) => i.kind === "solve_result" || i.kind === "solve_failure")?.kind === "solve_failure";
-  const composerPlaceholder = hasResult ? "שאלו על השיבוץ או בקשו שינוי..." : "הוסיפו כלל או בקשו שינוי...";
-  const composerSuggestions = lastFailed
-    ? ["הצג את הכללים המתנגשים", "הקל על מכסת גודל הכיתה"]
+  const composerPlaceholder = hasResult ? "שאלו אותי על השיבוץ או בקשו שינוי…" : "כתבו לי מה חשוב לכם בשיבוץ…";
+  // The pre-result case used to hand back an empty array, so a user who had
+  // typed one rule and sent it got a bare input and no idea what else was
+  // possible. Every state now offers a next move.
+  const fallbackSuggestions: SuggestedAction[] = lastFailed
+    ? [
+        { label: "כללי החובה המתנגשים", message: "הציגי את כללי החובה שמתנגשים זה בזה." },
+        { label: "בדיקת טווח רחב יותר", message: "בדקי מה יקרה אם נרחיב מעט את טווח גודל הכיתה." },
+      ]
     : hasResult
-      ? ["בדוק בקשות חברות", "שפר איזון לימודי"]
-      : [];
+      ? [{ label: "בדיקת בקשות החברות", message: "בדקי אילו בקשות חברות קיבלו מענה בשיבוץ." }]
+      : timeline.length > 0
+        ? [{ label: "הכללים הפעילים", message: "הציגי את הכללים הפעילים ואת ההגדרות שלהם." }]
+        : [];
+  const composerSuggestions = suggestions.length > 0 ? suggestions : fallbackSuggestions;
 
   if (fixtureName && FIXTURES[fixtureName]) {
     return <FixturePreview fixture={FIXTURES[fixtureName]} />;
   }
 
-  if (!datasetReady) {
+  if (phase === "booting") {
     return (
       <div className="ws-shell">
-        <TopBar onRunSolve={() => {}} solving={false} canSolve={false} hasResult={false} />
-        <DatasetOnboarding onReady={handleReady} onWarning={handleWarning} />
+        <TopBar runState="none" onRunSolve={() => {}} canSolve={false} />
+        <div className="ws-onboarding">
+          <div className="ws-onboarding-box">
+            <span className="ws-spinner" aria-hidden />
+            <p style={{ margin: 0 }}>רגע…</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "welcome") {
+    return (
+      <div className="ws-shell">
+        <TopBar runState="none" onRunSolve={() => {}} canSolve={false} />
+        <Welcome onPlan={() => setPhase("workspace")} onUpload={() => setPhase("upload")} />
+      </div>
+    );
+  }
+
+  if (phase === "upload") {
+    return (
+      <div className="ws-shell">
+        <TopBar runState="none" onRunSolve={() => {}} canSolve={false} onStartOver={() => setConfirmingReset(true)} />
+        <DatasetOnboarding onReady={handleReady} onWarning={handleWarning} onBack={() => setPhase("welcome")} />
       </div>
     );
   }
@@ -142,8 +241,18 @@ export default function Home() {
   return (
     <>
       <WorkspaceShell
+        inspectorOpen={inspectorOpen}
+        onCloseInspector={() => setInspectorOpen(false)}
         topBar={
-          <TopBar onRunSolve={runSolve} solving={solving} canSolve={datasetReady && !solving} hasResult={hasResult} />
+          <TopBar
+            runState={runState}
+            onRunSolve={runSolve}
+            canSolve={datasetReady && !solving}
+            onUploadData={!datasetReady ? () => setPhase("upload") : undefined}
+            onStartOver={() => setConfirmingReset(true)}
+            inspectorOpen={inspectorOpen}
+            onToggleInspector={() => setInspectorOpen((v) => !v)}
+          />
         }
         conversation={
           <Conversation
@@ -151,6 +260,8 @@ export default function Home() {
             sending={sending}
             solving={solving}
             deciding={deciding}
+            studentCount={studentCount}
+            hasDataset={datasetReady}
             onSend={sendMessage}
             onConfirmProposal={handleConfirmProposal}
             onRejectProposal={handleRejectProposal}
@@ -172,11 +283,21 @@ export default function Home() {
             onOpenRoster={openRoster}
             highlight={highlight}
             onHighlight={setHighlight}
+            sheetOpen={inspectorOpen}
           />
         }
       />
+      <ConfirmDialog
+        open={confirmingReset}
+        onOpenChange={setConfirmingReset}
+        title="להתחיל מחדש?"
+        body="הכללים, השיחה, רשימת העמודות והקובץ שנטען יימחקו, ותחזרו למסך הפתיחה. אין דרך לשחזר."
+        confirmLabel="כן, להתחיל מחדש"
+        danger
+        onConfirm={() => void handleStartOver()}
+      />
       <RosterWorkbench open={workbench === "roster"} onClose={() => setWorkbench(null)} />
-      <ResultsBoard open={workbench === "results"} onClose={() => setWorkbench(null)} />
+      <ResultsBoard open={workbench === "results"} onClose={() => setWorkbench(null)} onResultChanged={refreshResultState} />
     </>
   );
 }
