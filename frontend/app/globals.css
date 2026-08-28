@@ -121,7 +121,7 @@ body {
    content) moves the scrollbar to the box's right edge instead, which for
    the conversation pane IS the outer edge of the viewport. */
 .ws-timeline-scroll { flex: 1; min-height: 0; overflow-y: auto; direction: ltr; }
-.ws-timeline-content { direction: rtl; display: flex; flex-direction: column; min-height: 100%; gap: var(--sp-3); padding: var(--sp-5) var(--sp-6); }
+.ws-timeline-content { direction: rtl; display: flex; flex-direction: column; min-height: 100%; gap: var(--sp-3); padding: var(--sp-5) var(--sp-6); max-width: 860px; margin-inline: auto; width: 100%; }
 
 /* ---- first run: the launcher. The old empty state was an avatar and one
    italic example sentence over an otherwise blank canvas -- a user with a
@@ -158,18 +158,22 @@ body {
 .ws-scroll-bottom:hover { background: var(--cw-panel); border-color: var(--cw-ink-3); }
 .ws-scroll-bottom:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 2px; }
 
-.ws-avatar { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--cw-navy); color: #fff; display: grid; place-items: center; }
-
 @keyframes ws-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
-/* asymmetric by design: the user's own words get a filled bubble (something
+/* asymmetric by design: the user's own words get a filled pill (something
    they said, contained); the assistant's response sits directly on the
    white canvas like prose, not inside a card -- the artifacts that follow
    it already carry the visual weight, so the text itself doesn't need to. */
 .ws-bubble { max-width: min(80%, 640px); display: flex; align-items: flex-start; gap: var(--sp-2); font-size: var(--fs-md); line-height: 1.65; animation: ws-in 200ms ease-out; }
 .ws-bubble-text { white-space: pre-wrap; }
-.ws-bubble.user { align-self: flex-end; background: var(--cw-accent-tint); color: var(--cw-ink); padding: var(--sp-2) var(--sp-4); border-radius: var(--r-xl); border-end-end-radius: var(--r-sm); }
-.ws-bubble.assistant { align-self: flex-start; color: var(--cw-ink); padding: 2px 0; }
+.ws-bubble.user { align-self: flex-start; background: var(--cw-accent-tint); color: var(--cw-ink); padding: var(--sp-2) var(--sp-4); border-radius: var(--r-full); }
+/* stretch, not pinned to the opposite side -- prose reads straight down the
+   page from the same right margin as the question above it (dir: rtl gives
+   the text itself right-alignment for free), rather than jumping to a
+   narrower box hung off the left edge, which reads as a left-to-right
+   back-and-forth instead of one right-aligned column. */
+.ws-bubble.assistant { align-self: stretch; max-width: none; color: var(--cw-ink); padding: 2px 0; }
+.ws-bubble.assistant .ws-bubble-text { flex: 1; }
 
 .ws-dots { display: inline-flex; align-items: center; gap: 4px; padding: 2px 1px; }
 .ws-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--cw-ink-3); animation: ws-dot 1.1s ease-in-out infinite; }
@@ -334,6 +338,24 @@ body {
 .ws-event { display: flex; align-items: center; gap: 7px; font-size: var(--fs-xs); color: var(--cw-ink-3); padding: 1px 2px; align-self: center; max-width: 860px; width: 100%; }
 .ws-event .ws-event-time { margin-inline-start: auto; }
 .ws-event + .ws-event { margin-top: -7px; }
+/* the "what the agent read" caption sits directly under the user's own
+   question -- a full-width row (like the other activity events) strands
+   its timestamp at the far edge of the column, unrelated-looking to the
+   message it's actually reporting on. */
+.ws-event.ws-event-inline { align-self: flex-start; width: auto; max-width: min(80%, 640px); }
+.ws-event.ws-event-inline .ws-event-time { margin-inline-start: 0; }
+
+/* a change the system actually made to the assignment (a rule landing, a
+   student moved, a reoptimization) is not read-only chatter like the rest
+   of .ws-event -- it needs to visibly register as "something happened",
+   so it gets its own bordered card instead of disappearing into a line of
+   muted log text. */
+.ws-event.ws-event-boxed {
+  align-self: flex-start; width: auto; max-width: min(80%, 640px);
+  background: var(--cw-panel); border: 1px solid var(--cw-line); border-radius: var(--r-md);
+  padding: 8px 12px; color: var(--cw-ink-2);
+}
+.ws-event.ws-event-boxed .ws-event-time { margin-inline-start: 0; color: var(--cw-ink-3); }
 
 /* analytical output earns more width than prose: text stays at a readable
    ~860px, artifacts carrying data (result summary, comparisons) break out
@@ -351,15 +373,19 @@ body {
 
 /* contextual quick actions -- these fill the composer rather than firing,
    so the user still reads and sends. Hidden as soon as they start typing. */
-.ws-composer-suggestions { max-width: 860px; margin-inline: auto; width: 100%; display: flex; gap: 7px; flex-wrap: wrap; animation: ws-in 200ms ease-out; }
-.ws-suggestion-chip { font-size: var(--fs-sm); color: var(--cw-ink-2); background: var(--cw-card); border: 1px solid var(--cw-line); border-radius: var(--r-full); padding: 5px var(--sp-3); cursor: pointer; font-family: inherit; transition: background-color 130ms ease-out, color 130ms ease-out, border-color 130ms ease-out; }
-.ws-suggestion-chip:hover:not(:disabled) { background: var(--cw-accent-tint); color: var(--cw-accent-strong); border-color: color-mix(in srgb, var(--cw-accent) 35%, var(--cw-line)); }
-.ws-suggestion-chip:active:not(:disabled) { background: color-mix(in srgb, var(--cw-accent) 16%, var(--cw-card)); }
-.ws-suggestion-chip:focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 2px; }
-.ws-suggestion-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+/* follow-up openings inline in the timeline -- same row style as the
+   first-run launcher (ws-launcher-list/-row), just introduced with a
+   lighter label and a little breathing room above it instead of the
+   launcher's full head/subtitle block. */
+.ws-inline-suggestions { align-self: center; max-width: 860px; width: 100%; margin-top: var(--sp-2); animation: ws-in 200ms ease-out; }
 .ws-composer-surface:focus-within { border-color: var(--cw-accent); box-shadow: var(--elev-float), 0 0 0 3px color-mix(in srgb, var(--cw-accent) 12%, transparent); }
 .ws-composer-textarea { flex: 1; min-width: 0; border: 0; background: none; outline: none; resize: none; font-family: inherit; font-size: var(--fs-md); line-height: 1.55; color: var(--cw-ink); padding: 6px 0; max-height: 160px; overflow-y: auto; }
-.ws-composer-textarea::placeholder { color: var(--cw-ink-3); }
+/* dir="auto" on the textarea lets typed English align itself correctly,
+   but with no text yet to sniff, an empty auto-direction field defaults to
+   ltr -- so the placeholder (Hebrew) reads from the wrong edge until the
+   user's first keystroke. The placeholder pseudo-element takes its own
+   direction independent of the field, so pin it to rtl explicitly. */
+.ws-composer-textarea::placeholder { color: var(--cw-ink-3); direction: rtl; text-align: right; }
 .ws-composer-textarea:disabled { opacity: 0.7; }
 .ws-composer-send { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--cw-accent); color: #fff; transition: background-color 150ms ease, transform 100ms ease; }
 .ws-composer-send:hover:not(:disabled) { background: var(--cw-accent-strong); }
@@ -850,3 +876,210 @@ body {
 .dp-drop-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .dp-drag-overlay { position: fixed; inset: 0; z-index: 60; background: color-mix(in srgb, var(--cw-accent) 10%, rgba(244, 245, 246, 0.72)); backdrop-filter: blur(2px); display: grid; place-items: center; }
 .dp-drag-overlay .box { border: 2px dashed var(--cw-accent); border-radius: 16px; padding: 40px 64px; background: var(--cw-card); font-size: 16px; font-weight: 700; color: var(--cw-accent-strong); box-shadow: var(--cw-shadow-hover); display: flex; flex-direction: column; align-items: center; gap: 10px; }
+
+/* ============================================================
+   Premium visual pass — calm command center
+   Warm architectural canvas, high-contrast ink, selective electric blue,
+   and depth reserved for the moments that deserve attention.
+   ============================================================ */
+:root {
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 21px;
+  --fs-2xl: 34px;
+  --r-sm: 7px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --r-xl: 24px;
+  --elev-float: 0 1px 2px rgba(22, 32, 51, 0.04), 0 10px 30px rgba(22, 32, 51, 0.08);
+  --elev-overlay: 0 18px 60px rgba(22, 32, 51, 0.16);
+  --cw-ground: #f7f6f2;
+  --cw-panel: #f0efe9;
+  --cw-card: #ffffff;
+  --cw-navy: #162033;
+  --cw-ink: #162033;
+  --cw-ink-2: #586477;
+  --cw-ink-3: #687487;
+  --cw-ink-4: #98a1ae;
+  --cw-line: #e4e2dc;
+  --cw-line-2: #efeee9;
+  --cw-accent: #3975f6;
+  --cw-accent-strong: #245fdc;
+  --cw-accent-tint: #edf3ff;
+  --cw-good: #16856b;
+  --cw-warn: #c06b3c;
+  --cw-crit: #d44d55;
+  --cw-shadow-hover: 0 12px 34px rgba(22, 32, 51, 0.12);
+  --cw-shadow-card: 0 1px 2px rgba(22, 32, 51, 0.04), 0 8px 24px rgba(22, 32, 51, 0.05);
+}
+
+body { background: var(--cw-ground); }
+
+.ws-topbar {
+  height: 66px;
+  padding-inline: 24px;
+  background: color-mix(in srgb, var(--cw-card) 88%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--cw-line) 72%, transparent);
+  box-shadow: 0 1px 0 rgba(22, 32, 51, 0.025);
+  backdrop-filter: blur(18px) saturate(1.15);
+}
+.ws-brand { border-inline-end: 0; padding-inline-end: 12px; gap: 11px; }
+.ws-brand-mark {
+  width: 36px; height: 36px; border-radius: 12px;
+  background: var(--cw-navy);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.12), 0 6px 16px rgba(22,32,51,.16);
+}
+.ws-brand-title { font-size: 17px; font-weight: 750; letter-spacing: -0.035em; }
+.ws-runstate { border: 0; padding: 7px 12px; background: var(--cw-panel); }
+
+.ws-main { grid-template-columns: minmax(0, 1fr) 390px; }
+.ws-conversation {
+  border-inline-end-color: color-mix(in srgb, var(--cw-line) 70%, transparent);
+  background:
+    radial-gradient(circle at 78% 14%, color-mix(in srgb, var(--cw-accent) 5%, transparent) 0, transparent 30%),
+    var(--cw-ground);
+}
+.ws-timeline-content { gap: 18px; padding-block: 32px; }
+.ws-launcher { max-width: 680px; }
+.ws-launcher-title { font-size: 38px; font-weight: 650; line-height: 1.08; letter-spacing: -0.045em; }
+.ws-launcher-sub { font-size: 16px; max-width: 52ch; }
+.ws-launcher-row { padding: 13px 12px; border: 1px solid transparent; }
+.ws-launcher-row:hover {
+  background: color-mix(in srgb, var(--cw-card) 78%, transparent);
+  border-color: var(--cw-line);
+  box-shadow: 0 8px 24px rgba(22,32,51,.055);
+}
+.ws-launcher-row .ico { width: 32px; height: 32px; border-radius: 10px; }
+
+.ws-bubble { font-size: 15px; line-height: 1.75; }
+.ws-bubble.user {
+  background: var(--cw-navy); color: #fff;
+  padding: 10px 17px; border-radius: 20px 20px 20px 7px;
+  box-shadow: 0 7px 20px rgba(22,32,51,.12);
+}
+.ws-bubble.assistant { font-size: 16px; line-height: 1.8; padding-block: 3px; }
+
+.ws-proposal {
+  border: 0; border-radius: 20px; padding: 20px;
+  background: color-mix(in srgb, var(--cw-accent) 7%, var(--cw-card));
+  box-shadow: inset 3px 0 0 var(--cw-accent), var(--cw-shadow-card);
+}
+.ws-proposal-head { letter-spacing: .08em; }
+
+.ws-artifact {
+  border-color: color-mix(in srgb, var(--cw-line) 78%, transparent);
+  border-radius: 22px; padding: 24px;
+  box-shadow: var(--cw-shadow-card);
+}
+.ws-artifact-ok {
+  border: 0;
+  background:
+    radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--cw-good) 9%, transparent), transparent 34%),
+    var(--cw-card);
+  box-shadow: 0 1px 2px rgba(22,32,51,.04), 0 18px 50px rgba(22,32,51,.09);
+}
+.ws-result-hero { display: flex; justify-content: space-between; align-items: center; gap: 28px; padding-bottom: 18px; border-bottom: 1px solid var(--cw-line-2); }
+.ws-result-intro { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
+.ws-result-icon {
+  width: 42px; height: 42px; flex: none; display: grid; place-items: center;
+  border-radius: 14px; color: #fff; background: var(--cw-good);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--cw-good) 24%, transparent);
+}
+.ws-artifact-warn .ws-result-icon { background: var(--cw-warn); }
+.ws-result-kicker { margin-bottom: 3px; color: var(--cw-good); font-size: 11px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.ws-artifact-warn .ws-result-kicker { color: var(--cw-warn); }
+.ws-result-title { color: var(--cw-ink); font-size: 25px; font-weight: 650; line-height: 1.2; letter-spacing: -.035em; }
+.ws-result-range { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
+.ws-result-range > span { color: var(--cw-ink); font-size: 42px; font-weight: 680; line-height: 1; letter-spacing: -.055em; }
+.ws-result-range small { color: var(--cw-ink-3); font-size: 11px; margin-top: 5px; }
+.ws-metrics-row { gap: 0; padding-block: 10px; border-bottom: 1px solid var(--cw-line-2); }
+.ws-metric { flex: 1; padding-inline: 18px; }
+.ws-metric:first-child { padding-inline-start: 0; }
+.ws-metric + .ws-metric { border-inline-start: 1px solid var(--cw-line-2); }
+.ws-metric-value { font-size: 32px; font-weight: 650; }
+.ws-class-bars { gap: 5px; padding-block: 7px; }
+.ws-class-bar-row { padding: 9px 11px; border-radius: 11px; }
+.ws-track { height: 7px; }
+.ws-attention { margin-top: 4px; padding: 12px; border-radius: 14px; background: color-mix(in srgb, var(--cw-warn) 5%, var(--cw-panel)); }
+.ws-artifact-actions { padding-top: 6px; }
+
+.ws-composer-row {
+  padding-block: 14px 22px;
+  background: linear-gradient(to top, var(--cw-ground) 65%, transparent);
+}
+.ws-composer-surface {
+  min-height: 54px; border: 0; border-radius: 27px; padding: 10px 11px 10px 20px;
+  box-shadow: 0 1px 0 rgba(255,255,255,.9) inset, 0 14px 40px rgba(22,32,51,.11);
+}
+.ws-composer-surface:focus-within { box-shadow: 0 14px 44px rgba(22,32,51,.13), 0 0 0 3px color-mix(in srgb, var(--cw-accent) 14%, transparent); }
+.ws-composer-textarea { font-size: 15px; }
+.ws-composer-send { width: 36px; height: 36px; box-shadow: 0 7px 18px color-mix(in srgb, var(--cw-accent) 24%, transparent); }
+
+.ws-inspector { padding: 24px 18px; background: color-mix(in srgb, var(--cw-panel) 52%, var(--cw-ground)); }
+.ws-insp-mode { gap: 14px; }
+.ws-insp-title { padding-inline: 6px; font-size: 11px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
+.ws-insp-card, .ws-insp-section {
+  border-color: color-mix(in srgb, var(--cw-line) 78%, transparent);
+  border-radius: 18px; padding: 18px;
+  box-shadow: 0 1px 2px rgba(22,32,51,.025);
+  transition: transform 160ms ease-out, box-shadow 160ms ease-out, border-color 160ms ease-out;
+}
+.ws-insp-card:has(.ws-insp-card-head:hover) { transform: translateY(-1px); box-shadow: var(--cw-shadow-card); border-color: color-mix(in srgb, var(--cw-accent) 18%, var(--cw-line)); }
+.ws-insp-icon-lg { width: 34px; height: 34px; border-radius: 11px; }
+.ws-insp-card-title { font-size: 16px; }
+.ws-insp-figure .n { font-size: 38px; font-weight: 650; }
+
+.cw-col { padding-inline: 10px; }
+.cw-col + .cw-col { border-inline-start-color: var(--cw-line); }
+.cw-col-head { padding: 10px 6px 14px; }
+.cw-col-title .size { font-size: 24px; }
+.cw-col-body { gap: 5px; }
+.cw-card { min-height: 34px; border-radius: 8px; padding: 6px 9px; box-shadow: 0 1px 2px rgba(22,32,51,.025); }
+.cw-card:hover { border-color: color-mix(in srgb, var(--cw-accent) 24%, var(--cw-line)); box-shadow: 0 8px 20px rgba(22,32,51,.10); }
+
+@media (max-width: 1200px) { .ws-main { grid-template-columns: minmax(0, 1fr) 340px; } }
+@media (max-width: 700px) {
+  .ws-topbar { height: 60px; padding-inline: 14px; gap: 10px; }
+  .ws-brand-title { display: none; }
+  .ws-runstate { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+  .ws-timeline-content { padding: 22px 16px; }
+  .ws-composer-row { padding-inline: 14px; }
+  .ws-result-hero { align-items: flex-start; }
+  .ws-result-icon { display: none; }
+  .ws-result-title { font-size: 21px; }
+  .ws-result-range > span { font-size: 32px; }
+  .ws-metric { padding-inline: 10px; }
+}
+
+/* Softer elevation variant: retain the hierarchy without making every
+   surface look suspended above the canvas. */
+:root {
+  --cw-accent: #4a72d8;
+  --cw-accent-strong: #365fbe;
+  --cw-accent-tint: #eef2fb;
+  --elev-float: 0 1px 2px rgba(22, 32, 51, 0.035), 0 5px 16px rgba(22, 32, 51, 0.055);
+  --elev-overlay: 0 12px 38px rgba(22, 32, 51, 0.12);
+  --cw-shadow-hover: 0 6px 18px rgba(22, 32, 51, 0.07);
+  --cw-shadow-card: 0 1px 2px rgba(22, 32, 51, 0.025), 0 4px 12px rgba(22, 32, 51, 0.035);
+}
+
+.ws-brand-mark { box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 3px 8px rgba(22,32,51,.1); }
+.ws-conversation { background: var(--cw-ground); }
+.ws-launcher-row:hover { box-shadow: 0 3px 10px rgba(22,32,51,.035); }
+.ws-bubble.user {
+  color: var(--cw-ink);
+  background: color-mix(in srgb, var(--cw-accent) 10%, var(--cw-card));
+  box-shadow: none;
+}
+.ws-proposal { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--cw-accent) 68%, transparent); }
+.ws-artifact { box-shadow: var(--cw-shadow-card); }
+.ws-artifact-ok {
+  background: var(--cw-card);
+  box-shadow: 0 1px 2px rgba(22,32,51,.025), 0 6px 18px rgba(22,32,51,.045);
+}
+.ws-result-icon { box-shadow: none; background: color-mix(in srgb, var(--cw-good) 88%, var(--cw-card)); }
+.ws-composer-surface { box-shadow: 0 1px 2px rgba(22,32,51,.035), 0 6px 18px rgba(22,32,51,.065); }
+.ws-composer-surface:focus-within { box-shadow: 0 1px 2px rgba(22,32,51,.035), 0 7px 20px rgba(22,32,51,.07), 0 0 0 2px color-mix(in srgb, var(--cw-accent) 11%, transparent); }
+.ws-composer-send { box-shadow: none; }
+.ws-insp-card:has(.ws-insp-card-head:hover) { transform: none; box-shadow: 0 2px 8px rgba(22,32,51,.035); }
+.cw-card:hover { box-shadow: 0 3px 10px rgba(22,32,51,.055); transform: none; }

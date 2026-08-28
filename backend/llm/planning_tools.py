@@ -138,6 +138,8 @@ def _set_class_count(sess, args: SetClassCountArgs) -> dict:
         from ..solver_inputs import sync_class_size_bounds
 
         sync_class_size_bounds(sess, sess.mapped_df)
+        if previous != args.num_classes:
+            sess.mark_inputs_changed()
     return {"num_classes": args.num_classes, "previous": previous, "size_rule_rescaled": sess.mapped_df is not None}
 
 

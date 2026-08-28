@@ -11,7 +11,7 @@ import ConstraintInspector from "./inspector/ConstraintInspector";
 // wiring up the rest of useWorkspace()'s real-API surface.
 export type ContextInspectorWorkspace = Pick<
   Workspace,
-  "inspector" | "setInspector" | "refreshConstraintsSummary" | "appendRunConfigChange" | "dataVersion" | "bumpDataVersion"
+  "inspector" | "setInspector" | "refreshConstraintsSummary" | "refreshResultState" | "appendRunConfigChange" | "dataVersion" | "bumpDataVersion"
 > & {
   constraintsSummary: ConstraintsSummary | null;
 };
@@ -39,7 +39,7 @@ export default function ContextInspector({
   /** Only meaningful below 900px, where the pane is a sheet rather than a column. */
   sheetOpen?: boolean;
 }) {
-  const { inspector, setInspector, constraintsSummary, refreshConstraintsSummary, appendRunConfigChange, dataVersion, bumpDataVersion } =
+  const { inspector, setInspector, constraintsSummary, refreshConstraintsSummary, refreshResultState, appendRunConfigChange, dataVersion, bumpDataVersion } =
     workspace;
 
   function open(state: InspectorState) {
@@ -68,6 +68,7 @@ export default function ContextInspector({
             onChanged={() => {
               bumpDataVersion();
               void refreshConstraintsSummary();
+              void refreshResultState();
             }}
             onRemoved={() => open({ type: "constraints" })}
           />
@@ -82,6 +83,7 @@ export default function ContextInspector({
             onConstraintsChanged={() => {
               bumpDataVersion();
               void refreshConstraintsSummary();
+              void refreshResultState();
             }}
             onRunConfigChange={appendRunConfigChange}
             refreshKey={dataVersion}

@@ -32,7 +32,7 @@ export default function ConstraintBrowser({
   useEffect(() => {
     getConstraints()
       .then((r) => setConstraints(r.constraints))
-      .catch(() => toast.error("שגיאה בטעינת רשימת הכללים"));
+      .catch(() => toast.error("לא הצלחתי לטעון את רשימת הכללים"));
   }, [refreshKey]);
 
   if (!constraints) return <Skeleton className="h-64 w-full" />;
@@ -68,14 +68,14 @@ export default function ConstraintBrowser({
 
       {hard.length > 0 && (
         <div className="ws-rule-group">
-          <div className="ws-rule-group-title">קשיחים</div>
+          <div className="ws-rule-group-title">כללי חובה</div>
           {hard.map((c) => row(c, "hard"))}
         </div>
       )}
 
       {soft.length > 0 && (
         <div className="ws-rule-group">
-          <div className="ws-rule-group-title">העדפות</div>
+          <div className="ws-rule-group-title">כללים מועדפים</div>
           {soft.map((c) => row(c, "soft"))}
         </div>
       )}

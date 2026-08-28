@@ -50,6 +50,43 @@ class ChatMessageRequest(BaseModel):
     message: str
 
 
+def _suggested_actions(sess: Session, steps: list[dict]) -> list[dict]:
+    """Small, structured next moves for the UI.
+
+    Suggestions are application data, not Markdown scraped from model prose.
+    They are deliberately deterministic and reflect the state after the
+    turn; the model remains responsible only for the answer itself.
+    """
+    if sess.pending_proposal is not None:
+        return []
+    if sess.mapped_df is None:
+        return [
+            {"label": "מה כדאי להכין בקובץ?", "message": "אילו נתונים כדאי להכין בקובץ לפני שמתחילים?"},
+            {"label": "הצג את רשימת הדרישות", "message": "הצג את רשימת העמודות שסיכמנו להכין."},
+        ]
+    result_state = sess.result_state()
+    if result_state["has_result"]:
+        if result_state["is_stale"]:
+            return [
+                {"label": "מה השתנה מאז ההרצה?", "message": "אילו כללים השתנו מאז השיבוץ האחרון?"},
+                {"label": "בדיקת הכללים הפעילים", "message": "הצג את הכללים הפעילים והערכים שלהם."},
+            ]
+        tools = {s.get("tool") for s in steps if s.get("ok")}
+        if "get_class_sizes" in tools:
+            return [
+                {"label": "בדיקת הרכב הכיתות", "message": "בדוק את הרכב הכיתות והצבע על פערים משמעותיים."},
+                {"label": "בדיקת בקשות חברות", "message": "בדוק את המענה לבקשות החברות בשיבוץ."},
+            ]
+        return [
+            {"label": "בדיקת בקשות חברות", "message": "בדוק את המענה לבקשות החברות בשיבוץ."},
+            {"label": "איתור פערים", "message": "אילו פערים משמעותיים כדאי לבדוק בשיבוץ?"},
+        ]
+    return [
+        {"label": "הצג כללים פעילים", "message": "הצג את הכללים הפעילים והערכים שלהם."},
+        {"label": "בדוק מוכנות להרצה", "message": "בדוק אם הנתונים והכללים מוכנים להרצת שיבוץ."},
+    ]
+
+
 def _clarification_message(ambiguous: list[Mention], unmatched: list[Mention]) -> str:
     lines = []
     for m in ambiguous:
@@ -120,7 +157,7 @@ def send_chat_message(req: ChatMessageRequest, x_session_id: str = Header(...)):
             sess.chat_history.append({"role": "user", "content": req.message})
             sess.chat_history.append({"role": "assistant", "content": clarification})
             store.save(sess)
-            return {"reply": clarification, "pending_proposal": None}
+            return {"reply": clarification, "pending_proposal": None, "suggestions": []}
         redacted = redact_text(req.message, mentions, sess.token_map.token_for)
     else:
         # Planning mode: no roster, so there is no name-to-token map to
@@ -145,7 +182,7 @@ def send_chat_message(req: ChatMessageRequest, x_session_id: str = Header(...)):
     system_prompt = build_system_prompt(
         build_roster_context(df),
         build_constraints_context(constraints),
-        build_result_context(has_result, cfg.num_classes, class_sizes),
+        build_result_context(has_result, cfg.num_classes, class_sizes, stale=sess.result_state()["is_stale"]),
         build_dataset_columns_context(sess.dataset_schema),
         build_planning_context(df is None, cfg.num_classes, sess.data_requirements),
     )
@@ -178,17 +215,24 @@ def send_chat_message(req: ChatMessageRequest, x_session_id: str = Header(...)):
             reply = f"לא הצלחתי לפרש את הבקשה כראוי ({e}). אפשר לנסח אחרת?"
             sess.chat_history.append({"role": "assistant", "content": reply})
             store.save(sess)
-            return {"reply": reply, "pending_proposal": None, "steps": steps, "state_changed": state_changed}
+            return {"reply": reply, "pending_proposal": None, "steps": steps, "state_changed": state_changed, "suggestions": []}
 
         sess.pending_proposal = proposal
         sess.chat_history.append({"role": "assistant", "content": summary})
         store.save(sess)
-        return {"reply": summary, "pending_proposal": asdict(proposal), "steps": steps, "state_changed": state_changed}
+        return {"reply": summary, "pending_proposal": asdict(proposal), "steps": steps, "state_changed": state_changed, "suggestions": []}
 
     reply = turn.text or ""
     sess.chat_history.append({"role": "assistant", "content": reply})
     store.save(sess)
-    return {"reply": reply, "pending_proposal": None, "steps": steps, "state_changed": state_changed}
+    return {
+        "reply": reply,
+        "pending_proposal": None,
+        "steps": steps,
+        "state_changed": state_changed,
+        "suggestions": _suggested_actions(sess, steps),
+        "result_state": sess.result_state(),
+    }
 
 
 @router.post("/api/chat/confirm")
@@ -217,10 +261,11 @@ def confirm_pending_proposal(x_session_id: str = Header(...)):
     else:
         raise HTTPException(status_code=500, detail="סוג הצעה לא מוכר.")
 
+    sess.mark_inputs_changed()
     sess.pending_proposal = None
     sess.chat_history.append({"role": "assistant", "content": "אושר ועודכן ברשימת הכללים."})
     store.save(sess)
-    return {"applied": True, "result": result}
+    return {"applied": True, "result": result, "result_state": sess.result_state()}
 
 
 @router.post("/api/chat/reject")
@@ -246,7 +291,7 @@ def get_chat_history(x_session_id: str = Header(...)):
 @router.get("/api/constraints")
 def list_constraints(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
-    return {"constraints": [asdict(c) for c in sess.constraints]}
+    return {"constraints": [asdict(c) for c in sess.constraints], "result_state": sess.result_state()}
 
 
 class ConstraintPatchRequest(BaseModel):
@@ -264,8 +309,9 @@ def patch_constraint(constraint_id: str, req: ConstraintPatchRequest, x_session_
         target.hard = req.hard
     if req.active is not None:
         target.active = req.active
+    sess.mark_inputs_changed()
     store.save(sess)
-    return asdict(target)
+    return {**asdict(target), "result_state": sess.result_state()}
 
 
 @router.delete("/api/constraints/{constraint_id}")
@@ -273,5 +319,7 @@ def delete_constraint(constraint_id: str, x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     before = len(sess.constraints)
     sess.constraints = [c for c in sess.constraints if c.id != constraint_id]
+    if len(sess.constraints) != before:
+        sess.mark_inputs_changed()
     store.save(sess)
-    return {"removed": before - len(sess.constraints) > 0}
+    return {"removed": before - len(sess.constraints) > 0, "result_state": sess.result_state()}

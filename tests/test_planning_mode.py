@@ -72,6 +72,8 @@ def test_chat_answers_with_no_workbook_at_all(client, empty_session):
     body = resp.json()
     assert body["reply"] == "קבעתי שבע כיתות."
     assert body["state_changed"] is True, "a planning tool wrote state; the UI must be told to refresh"
+    assert body["suggestions"]
+    assert all(set(s) == {"label", "message"} for s in body["suggestions"])
     assert client.get("/api/run-config", headers=empty_session).json()["num_classes"] == 7
 
 

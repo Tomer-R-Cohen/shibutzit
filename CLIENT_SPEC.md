@@ -12,7 +12,7 @@ breakdown that can be manually edited and exported to Excel.
 
 | Component | Technology | Role |
 |---|---|---|
-| Frontend | Next.js (RTL, Hebrew UI) | User interface — 3 screens |
+| Frontend | Next.js (RTL, Hebrew UI) | Conversational workspace with roster and results workbenches |
 | Backend | FastAPI (Python) | Data processing, optimization, export |
 | Solver | Google OR-Tools CP-SAT | The assignment engine itself |
 | Storage | Local files (`backend/.sessions/`) | Per-session state persistence |

@@ -19,20 +19,22 @@ import { Icon } from "@/components/Icon";
  * The state is spelled out in words, never carried by the dot's colour
  * alone.
  */
-export type RunState = "none" | "solving" | "fresh" | "stale";
+export type RunState = "none" | "solving" | "fresh" | "adjusted" | "stale";
 
 const RUN_STATE_TEXT: Record<RunState, string> = {
-  none: "טרם הופק שיבוץ",
-  solving: "מפיק שיבוץ…",
+  none: "עדיין אין שיבוץ",
+  solving: "מכינה את השיבוץ…",
   fresh: "השיבוץ מעודכן",
-  stale: "הכללים השתנו מאז ההרצה",
+  adjusted: "השיבוץ עודכן ידנית",
+  stale: "השיבוץ לא כולל את השינויים האחרונים",
 };
 
 const RUN_ACTION_TEXT: Record<RunState, string> = {
-  none: "הרצת שיבוץ",
-  solving: "מריץ…",
-  fresh: "הרצה מחדש",
-  stale: "הרצה מחדש",
+  none: "יצירת שיבוץ",
+  solving: "מכינה…",
+  fresh: "יצירת שיבוץ חדש",
+  adjusted: "שיפור השיבוץ",
+  stale: "עדכון השיבוץ",
 };
 
 export default function TopBar({
@@ -66,11 +68,11 @@ export default function TopBar({
       </div>
 
       <span
-        className={clsx("ws-runstate", runState === "fresh" && "fresh", runState === "stale" && "stale", solving && "busy")}
+        className={clsx("ws-runstate", (runState === "fresh" || runState === "adjusted") && "fresh", runState === "stale" && "stale", solving && "busy")}
         aria-live="polite"
       >
         <span className="dot" aria-hidden />
-        {onUploadData ? "תכנון - טרם נטען קובץ" : RUN_STATE_TEXT[runState]}
+        {onUploadData ? "בשלב התכנון · עדיין אין קובץ" : RUN_STATE_TEXT[runState]}
       </span>
 
       <div className="ws-topbar-spacer" />
@@ -93,7 +95,7 @@ export default function TopBar({
             aria-controls="ws-inspector"
           >
             <Icon name="list" size={14} />
-            מצב נוכחי
+            תמונת מצב
           </button>
         )}
         {/* Planning mode has no roster, so "run" is meaningless and loading
@@ -102,7 +104,7 @@ export default function TopBar({
           <Button onClick={onUploadData}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
               <Icon name="upload" size={14} />
-              טעינת קובץ
+              העלאת קובץ
             </span>
           </Button>
         ) : (
@@ -111,7 +113,7 @@ export default function TopBar({
             on screen -- unless the rules moved under it, in which case it
             goes back to primary because re-running is now the point. */}
         <Button
-          variant={runState === "fresh" ? "secondary" : "primary"}
+          variant={runState === "fresh" || runState === "adjusted" ? "secondary" : "primary"}
           disabled={!canSolve || solving}
           onClick={onRunSolve}
         >

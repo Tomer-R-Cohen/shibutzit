@@ -10,7 +10,7 @@ import { RangeBar } from "../RangeBar";
 
 const SOURCE_LABELS: Record<string, string> = {
   builtin_default: "ברירת מחדל",
-  chat: "מהצ'אט",
+  chat: "מהשיחה",
   manual: "ידני",
 };
 
@@ -74,7 +74,7 @@ export default function ConstraintInspector({
     getConstraints()
       .then((r) => setConstraint(r.constraints.find((c) => c.id === id) ?? null))
       .catch(() => {
-        toast.error("שגיאה בטעינת הכלל");
+        toast.error("לא הצלחתי לטעון את הכלל");
         setConstraint(null);
       });
   }, [id]);
@@ -86,7 +86,7 @@ export default function ConstraintInspector({
       await patchConstraint(constraint.id, { hard });
       onChanged?.();
     } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : "שגיאה בעדכון הכלל");
+      toast.error(e instanceof ApiError ? e.message : "לא הצלחתי לעדכן את הכלל");
       setConstraint(constraint);
     }
   }
@@ -98,7 +98,7 @@ export default function ConstraintInspector({
       await patchConstraint(constraint.id, { active });
       onChanged?.();
     } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : "שגיאה בעדכון הכלל");
+      toast.error(e instanceof ApiError ? e.message : "לא הצלחתי לעדכן את הכלל");
       setConstraint(constraint);
     }
   }
@@ -112,7 +112,7 @@ export default function ConstraintInspector({
       onChanged?.();
       onRemoved?.();
     } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : "שגיאה בהסרת הכלל");
+      toast.error(e instanceof ApiError ? e.message : "לא הצלחתי להסיר את הכלל");
       setBusy(false);
     }
   }
@@ -147,7 +147,7 @@ export default function ConstraintInspector({
           </div>
 
           <div className="ws-insp-kv">
-            <span>חומרה</span>
+            <span>סוג הכלל</span>
             <button
               onClick={() => handleToggleHard(!constraint.hard)}
               aria-pressed={constraint.hard}

@@ -12,6 +12,7 @@ import RosterWorkbench from "@/components/workspace/RosterWorkbench";
 import ResultsBoard from "@/components/workspace/ResultsBoard";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { getStudents, resetSession } from "@/lib/api";
+import type { SuggestedAction } from "@/lib/api";
 import { FIXTURES } from "@/lib/fixtures";
 import { AttentionTarget, useWorkspace } from "@/lib/workspace";
 import { probeDataReady } from "@/lib/bootstrap";
@@ -49,6 +50,9 @@ export default function Home() {
     workbench,
     setWorkbench,
     refreshConstraintsSummary,
+    refreshResultState,
+    resultState,
+    suggestions,
     decideProposal,
     sendMessage,
     runSolve,
@@ -167,28 +171,36 @@ export default function Home() {
     }
   }
 
-  // Run state, derived rather than tracked: a rule that landed *after* the
-  // most recent solve means the assignment on screen no longer reflects the
-  // rules the user can see in the inspector. That gap was previously silent
-  // -- the top bar said "שיבוץ עדכני" no matter how much had changed since.
+  // The backend owns freshness through input/solve revisions. Timeline
+  // events are narrative only and cannot make an old result look current.
   const lastResultIdx = timeline.map((i) => i.kind).lastIndexOf("solve_result");
   const hasResult = lastResultIdx >= 0;
-  const rulesChangedSinceResult =
-    hasResult && timeline.slice(lastResultIdx + 1).some((i) => i.kind === "constraint_event");
-  const runState: RunState = solving ? "solving" : !hasResult ? "none" : rulesChangedSinceResult ? "stale" : "fresh";
+  const runState: RunState = solving
+    ? "solving"
+    : !resultState?.has_result
+      ? "none"
+      : resultState.is_stale
+        ? "stale"
+        : resultState.result_mode === "manual"
+          ? "adjusted"
+          : "fresh";
 
   const lastFailed = [...timeline].reverse().find((i) => i.kind === "solve_result" || i.kind === "solve_failure")?.kind === "solve_failure";
-  const composerPlaceholder = hasResult ? "שאלו על השיבוץ או בקשו שינוי..." : "הוסיפו כלל או בקשו שינוי...";
+  const composerPlaceholder = hasResult ? "שאלו אותי על השיבוץ או בקשו שינוי…" : "כתבו לי מה חשוב לכם בשיבוץ…";
   // The pre-result case used to hand back an empty array, so a user who had
   // typed one rule and sent it got a bare input and no idea what else was
   // possible. Every state now offers a next move.
-  const composerSuggestions = lastFailed
-    ? ["הצג את הכללים המתנגשים", "הקל על מכסת גודל הכיתה"]
+  const fallbackSuggestions: SuggestedAction[] = lastFailed
+    ? [
+        { label: "כללי החובה המתנגשים", message: "הציגי את כללי החובה שמתנגשים זה בזה." },
+        { label: "בדיקת טווח רחב יותר", message: "בדקי מה יקרה אם נרחיב מעט את טווח גודל הכיתה." },
+      ]
     : hasResult
-      ? ["בדוק בקשות חברות", "שפר איזון לימודי"]
+      ? [{ label: "בדיקת בקשות החברות", message: "בדקי אילו בקשות חברות קיבלו מענה בשיבוץ." }]
       : timeline.length > 0
-        ? ["לאזן את רמות הלימוד בין הכיתות", "הצג את הכללים הפעילים"]
+        ? [{ label: "הכללים הפעילים", message: "הציגי את הכללים הפעילים ואת ההגדרות שלהם." }]
         : [];
+  const composerSuggestions = suggestions.length > 0 ? suggestions : fallbackSuggestions;
 
   if (fixtureName && FIXTURES[fixtureName]) {
     return <FixturePreview fixture={FIXTURES[fixtureName]} />;
@@ -285,7 +297,7 @@ export default function Home() {
         onConfirm={() => void handleStartOver()}
       />
       <RosterWorkbench open={workbench === "roster"} onClose={() => setWorkbench(null)} />
-      <ResultsBoard open={workbench === "results"} onClose={() => setWorkbench(null)} />
+      <ResultsBoard open={workbench === "results"} onClose={() => setWorkbench(null)} onResultChanged={refreshResultState} />
     </>
   );
 }

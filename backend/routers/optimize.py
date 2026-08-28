@@ -10,6 +10,8 @@ from src.constraints import Constraint, locked_constraints
 from src.manual_adjustments import AdjustmentState, ManualAdjustmentError, apply_editor_dataframe
 from src.metrics import class_overview_table, compute_global_metrics, student_assignment_table, violations_report
 from src.optimizer import OptimizationError, OptimizationResult, optimize
+from src.friendship_graph import resolve_requests, unmatched_report
+from src.validation import validate_students
 
 from ..llm.narration import narrate_infeasibility, narrate_result, relaxation_candidate
 from ..schemas import LockingRequest, MoveStudentRequest
@@ -101,9 +103,11 @@ def set_locking(req: LockingRequest, x_session_id: str = Header(...)):
             except Exception:
                 sid = sid_str
             locked[sid] = int(cls) - 1
-    sess.locked_assignment = locked
+    if locked != sess.locked_assignment:
+        sess.locked_assignment = locked
+        sess.mark_inputs_changed()
     store.save(sess)
-    return {"locked_count": len(locked)}
+    return {"locked_count": len(locked), "result_state": sess.result_state()}
 
 
 @router.get("/api/locking")
@@ -126,7 +130,13 @@ def get_locking(x_session_id: str = Header(...)):
 def run_optimize(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     df = require(sess.mapped_df, "יש להשלים שלבים קודמים תחילה.")
-    if sess.validation_report is not None and sess.validation_report.has_errors():
+    # Recompute input-derived reports on every explicit solve. Roster edits
+    # invalidate their caches, and silently solving with an old friendship
+    # graph is worse than the small cost of rebuilding it here.
+    sess.validation_report = validate_students(df)
+    sess.friendship_result = resolve_requests(df)
+    sess.unmatched_df = unmatched_report(sess.friendship_result)
+    if sess.validation_report.has_errors():
         raise HTTPException(status_code=400, detail="קיימות שגיאות אימות חוסמות (שלב 4). יש לתקן לפני ההרצה.")
 
     cfg, constraints = build_solver_inputs(sess)
@@ -146,6 +156,8 @@ def run_optimize(x_session_id: str = Header(...)):
     )
     sess.opt_result = result
     sess.adjustment_state = AdjustmentState(assignment=dict(result.assignment), locked=set(locked.keys()))
+    if result.is_feasible:
+        sess.mark_solved()
     explanation = _narrate_if_infeasible(sess, result, constraints)
     relaxation = _propose_relaxation(sess, result, constraints)
     comment = _comment_on_result(sess, cfg, constraints) if result.is_feasible else None
@@ -160,6 +172,7 @@ def run_optimize(x_session_id: str = Header(...)):
         "infeasibility_explanation": explanation,
         "relaxation_proposal": relaxation,
         "result_comment": comment,
+        "result_state": sess.result_state(),
     }
 
 
@@ -203,7 +216,7 @@ def results_metrics(x_session_id: str = Header(...)):
         df, state.assignment, matched, constraints, cfg.num_classes, cfg.denominator_all_students,
         sess.opt_result.status_name, sess.opt_result.wall_time_seconds, sess.opt_result.objective_value,
     )
-    return gm.__dict__
+    return {**gm.__dict__, "result_state": sess.result_state()}
 
 
 @router.get("/api/results/violations")
@@ -239,25 +252,36 @@ def adjustment_move(req: MoveStudentRequest, x_session_id: str = Header(...)):
     state: AdjustmentState = sess.adjustment_state
     df = sess.mapped_df
     cfg, constraints = build_solver_inputs(sess)
+    matched = sess.friendship_result.matched if sess.friendship_result else {}
     try:
         state.move_student(req.student_id, req.new_class - 1, cfg.num_classes)
     except ManualAdjustmentError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if req.locked is True:
         state.lock(req.student_id)
+        sess.locked_assignment[req.student_id] = req.new_class - 1
+        sess.mark_inputs_changed()
     elif req.locked is False:
         state.unlock(req.student_id)
+        if req.student_id in sess.locked_assignment:
+            sess.locked_assignment.pop(req.student_id, None)
+            sess.mark_inputs_changed()
 
-    matched = sess.friendship_result.matched if sess.friendship_result else {}
+    sess.mark_manually_adjusted()
+    store.save(sess)
+
     gm = compute_global_metrics(df, state.assignment, matched, constraints, cfg.num_classes, cfg.denominator_all_students)
-    return {"assignment_updated": True, "metrics": gm.__dict__}
+    return {"assignment_updated": True, "metrics": gm.__dict__, "result_state": sess.result_state()}
 
 
 @router.post("/api/adjustment/reoptimize")
 def adjustment_reoptimize(x_session_id: str = Header(...)):
-    """Lock all current assignments and re-optimize the remainder. Single
-    optimize() call, mirroring the "lock all & re-optimize" button in the
-    Streamlit app's step 10."""
+    """Re-optimize around the students the counselor explicitly locked.
+
+    Locking every current placement would leave no decision for the solver
+    and merely reproduce the existing board. Only explicit locks are hard;
+    every other student may move to improve the objective.
+    """
     sess = store.get_or_create(x_session_id)
     if sess.adjustment_state is None:
         raise HTTPException(status_code=409, detail="יש להריץ אופטימיזציה תחילה (שלב 8).")
@@ -266,7 +290,6 @@ def adjustment_reoptimize(x_session_id: str = Header(...)):
     cfg, constraints = build_solver_inputs(sess)
     matched = sess.friendship_result.matched if sess.friendship_result else {}
 
-    state.lock_all_current()
     all_constraints = constraints + locked_constraints(state.locked_assignment(), hard=True)
     try:
         result = optimize(df, cfg, all_constraints, friendship_matched=matched)
@@ -281,6 +304,8 @@ def adjustment_reoptimize(x_session_id: str = Header(...)):
     sess.opt_result = result
     state.assignment = dict(result.assignment)
     sess.adjustment_state = state
+    if result.is_feasible:
+        sess.mark_solved()
     explanation = _narrate_if_infeasible(sess, result, all_constraints)
 
     return {
@@ -291,4 +316,5 @@ def adjustment_reoptimize(x_session_id: str = Header(...)):
         "infeasibility_notes": result.infeasibility_notes,
         "conflicting_constraint_ids": result.conflicting_constraint_ids,
         "infeasibility_explanation": explanation,
+        "result_state": sess.result_state(),
     }

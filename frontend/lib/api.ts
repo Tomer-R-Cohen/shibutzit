@@ -221,6 +221,16 @@ export interface RunConfig {
    */
   random_seed: number;
 }
+export interface ResultState {
+  has_result: boolean;
+  is_stale: boolean;
+  input_revision: number;
+  solve_revision: number | null;
+  result_mode: "solver" | "manual" | null;
+}
+export function getResultState() {
+  return request<ResultState>("/api/result-state");
+}
 export function getRunConfig() {
   return request<RunConfig>("/api/run-config");
 }
@@ -268,6 +278,10 @@ export interface AgentStep {
   tool: string;
   ok: boolean;
 }
+export interface SuggestedAction {
+  label: string;
+  message: string;
+}
 export function getChatHistory() {
   return request<{ messages: ChatMessage[]; pending_proposal: PendingProposal | null }>("/api/chat/history");
 }
@@ -278,6 +292,8 @@ export function sendChatMessage(message: string) {
     steps?: AgentStep[];
     /** A planning tool changed persisted state, so the panels are stale. */
     state_changed?: boolean;
+    suggestions?: SuggestedAction[];
+    result_state?: ResultState;
   }>("/api/chat/message", {
     method: "POST",
     body: JSON.stringify({ message }),
@@ -339,6 +355,7 @@ export interface OptimizeResponse {
   relaxation_proposal?: PendingProposal | null;
   // Short LLM read of a successful result; null when no LLM is configured.
   result_comment?: string | null;
+  result_state?: ResultState;
 }
 export function runOptimize() {
   return request<OptimizeResponse>("/api/optimize", { method: "POST" });
@@ -419,6 +436,25 @@ export function exportXlsxUrl() {
 export async function fetchExportBlob(): Promise<Blob> {
   const sid = getSessionId();
   const res = await fetch(`${API_BASE}/api/export.xlsx`, { headers: { "X-Session-Id": sid } });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const j = await res.json();
+      detail = j.detail ?? detail;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return res.blob();
+}
+
+// The fill-in template: base fields plus whatever columns the planning
+// conversation has since decided the workbook needs -- see
+// RequirementsCard, which is the only place this is downloaded from.
+export async function fetchTemplateBlob(): Promise<Blob> {
+  const sid = getSessionId();
+  const res = await fetch(`${API_BASE}/api/export-template.xlsx`, { headers: { "X-Session-Id": sid } });
   if (!res.ok) {
     let detail = res.statusText;
     try {

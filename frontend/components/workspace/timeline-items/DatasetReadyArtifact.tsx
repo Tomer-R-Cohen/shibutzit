@@ -55,10 +55,10 @@ export function DatasetReadyArtifact({
         <span className="cw-num">{levelCount} רמות לימודיות</span>
       </div>
       <LevelDistribution levelCounts={levelCounts} total={studentCount} />
-      {warningCount > 0 && <div className="ws-artifact-note">{warningCount} בקשות חברות דורשות בדיקה</div>}
+      {warningCount > 0 && <div className="ws-artifact-note">{warningCount} בקשות חברות לא זוהו בוודאות</div>}
       <div className="ws-artifact-actions">
         <button type="button" className="ws-link" onClick={onOpenRoster}>
-          פתיחת רשימת התלמידות
+          צפייה ברשימת התלמידות
         </button>
       </div>
     </div>
@@ -70,7 +70,7 @@ export function DataWarningArtifact({ problems }: { problems: string[] }) {
     <div className="ws-artifact ws-artifact-warn">
       <div className="ws-artifact-head">
         <Icon name="warning" size={14} />
-        <span>יש להשלים התאמת עמודות</span>
+        <span>צריך להשלים את התאמת העמודות</span>
       </div>
       <ul className="ws-artifact-list">
         {problems.map((p, i) => (

@@ -96,7 +96,7 @@ export default function OverviewInspector({
         onConstraintsChanged?.();
         if (note) onRunConfigChange?.(note);
       } catch (e) {
-        toast.error(e instanceof ApiError ? e.message : "שגיאה בשמירת ההגדרות");
+        toast.error(e instanceof ApiError ? e.message : "לא הצלחתי לשמור את ההגדרות");
       }
     }, 500);
   }
@@ -105,7 +105,7 @@ export default function OverviewInspector({
     if (!runConfig) return;
     const clamped = Math.min(MAX_CLASSES, Math.max(MIN_CLASSES, n));
     if (clamped === runConfig.num_classes) return;
-    patch({ ...runConfig, num_classes: clamped }, `מספר הכיתות שונה ל-${clamped}`);
+    patch({ ...runConfig, num_classes: clamped }, `מספר הכיתות עודכן ל-${clamped}`);
   }
 
   const dash = "—";
@@ -113,7 +113,7 @@ export default function OverviewInspector({
   return (
     <>
       <div className="ws-insp-title" style={{ padding: "0 2px" }}>
-        מצב נוכחי
+        תמונת מצב
       </div>
 
       {hasDataset && (
@@ -187,7 +187,7 @@ export default function OverviewInspector({
         </div>
 
         <div className="ws-insp-kv">
-          <label htmlFor="ws-time-limit">זמן חיפוש מרבי</label>
+          <label htmlFor="ws-time-limit">משך חיפוש מרבי</label>
           <span className="ws-insp-num">
             <input
               id="ws-time-limit"

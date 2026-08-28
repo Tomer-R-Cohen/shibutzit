@@ -7,6 +7,7 @@ import { Icon } from "@/components/Icon";
 import Timeline from "./Timeline";
 import Composer, { ComposerHandle } from "./Composer";
 import Launcher from "./Launcher";
+import type { SuggestedAction } from "@/lib/api";
 
 export default function Conversation({
   items,
@@ -42,7 +43,7 @@ export default function Conversation({
   onOpenConstraints: () => void;
   onOpenConstraint: (id: string) => void;
   composerPlaceholder: string;
-  composerSuggestions: string[];
+  composerSuggestions: SuggestedAction[];
   highlight: Highlight;
   onHighlight: (h: Highlight) => void;
   onAttentionTarget: (t: AttentionTarget) => void;
@@ -65,21 +66,44 @@ export default function Conversation({
           {items.length === 0 && !sending && !solving ? (
             <Launcher studentCount={studentCount} hasDataset={hasDataset} onPick={pick} />
           ) : (
-            <Timeline
-              items={items}
-              sending={sending}
-              solving={solving}
-              deciding={deciding}
-              onConfirmProposal={onConfirmProposal}
-              onRejectProposal={onRejectProposal}
-              onOpenRoster={onOpenRoster}
-              onOpenResults={onOpenResults}
-              onOpenConstraints={onOpenConstraints}
-              onOpenConstraint={onOpenConstraint}
-              highlight={highlight}
-              onHighlight={onHighlight}
-              onAttentionTarget={onAttentionTarget}
-            />
+            <>
+              <Timeline
+                items={items}
+                sending={sending}
+                solving={solving}
+                deciding={deciding}
+                onConfirmProposal={onConfirmProposal}
+                onRejectProposal={onRejectProposal}
+                onOpenRoster={onOpenRoster}
+                onOpenResults={onOpenResults}
+                onOpenConstraints={onOpenConstraints}
+                onOpenConstraint={onOpenConstraint}
+                highlight={highlight}
+                onHighlight={onHighlight}
+                onAttentionTarget={onAttentionTarget}
+              />
+              {/* follow-up openings, right where the conversation left off --
+                  same click-to-fill row style as the first-run launcher, so
+                  continuing feels like the same gesture as starting. Hidden
+                  while a reply is in flight so it doesn't compete with the
+                  "thinking" state. */}
+              {!sending && !solving && composerSuggestions.length > 0 && (
+                <div className="ws-inline-suggestions">
+                  <div className="ws-launcher-label">אפשר להמשיך עם</div>
+                  <div className="ws-launcher-list">
+                    {composerSuggestions.map((s) => (
+                      <button key={s.message} type="button" className="ws-launcher-row" onClick={() => pick(s.message)}>
+                        <span className="ico" aria-hidden>
+                          <Icon name="sparkle" size={15} />
+                        </span>
+                        <span className="txt">{s.label}</span>
+                        <Icon name="chevron" size={14} className="ws-chev" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -95,7 +119,6 @@ export default function Conversation({
         onSend={onSend}
         sending={sending}
         placeholder={composerPlaceholder}
-        suggestions={composerSuggestions}
       />
     </section>
   );

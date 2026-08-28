@@ -17,8 +17,8 @@ import { Icon, IconName } from "@/components/Icon";
  * every rule still passes through the user's own hands before it lands.
  */
 const OPENINGS: { icon: IconName; text: string }[] = [
-  { icon: "users", text: "שרה כהן ומיכל לוי לא באותה כיתה" },
-  { icon: "heart", text: "לוודא שלכל תלמידה יש לפחות חברה אחת בכיתה" },
+  { icon: "users", text: "שרה כהן ומיכל לוי לא ישובצו יחד" },
+  { icon: "heart", text: "חשוב שלכל תלמידה תהיה לפחות חברה אחת בכיתה" },
   { icon: "sliders", text: "לאזן את רמות הלימוד בין הכיתות" },
   { icon: "grid", text: "לחלק את התלמידות לשש כיתות" },
 ];
@@ -46,11 +46,11 @@ export default function Launcher({
   return (
     <div className="ws-launcher">
       <div className="ws-launcher-head">
-        <h1 className="ws-launcher-title">{hasDataset ? "מה חשוב שיקרה בשיבוץ?" : "בואו נתכנן את השכבה"}</h1>
+        <h1 className="ws-launcher-title">{hasDataset ? "מה חשוב לכם בשיבוץ?" : "בואו נתכנן את השיבוץ"}</h1>
         <p className="ws-launcher-sub">
           {hasDataset
-            ? `${studentCount != null ? `${studentCount} תלמידות נטענו. ` : ""}נסחו כלל בשפה חופשית — אציג לכם אותו לאישור לפני שהוא נכנס לתוקף, ותמיד אפשר לשנות או להסיר אותו אחר כך.`
-            : "עדיין אין קובץ, וזה בסדר. נחליט קודם כמה כיתות ומה חשוב שיקרה, ומזה תיבנה רשימת העמודות שצריך למלא באקסל."}
+            ? `${studentCount != null ? `${studentCount} תלמידות נקלטו. ` : ""}כתבו לי מה חשוב לכם בשפה חופשית. אנסח כל כלל כהצעה ואחכה לאישורכם לפני שאחיל אותו.`
+            : "אין צורך בקובץ בשלב הזה. נגדיר יחד את מספר הכיתות ואת עקרונות השיבוץ, ובהמשך אכין לכם רשימה מסודרת של הנתונים הדרושים."}
         </p>
       </div>
 

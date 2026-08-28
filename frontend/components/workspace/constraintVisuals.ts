@@ -4,7 +4,7 @@ import { ConstraintType } from "@/lib/api";
 // ConstraintInspector so the same constraint reads the same way everywhere
 // in the workspace.
 export const TYPE_LABELS: Record<ConstraintType, string> = {
-  capacity: "מכסה",
+  capacity: "טווח או מגבלה",
   separate: "הפרדה",
   together: "צירוף",
   at_least_one_of: "לפחות אחת מקבוצה",

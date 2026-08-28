@@ -21,10 +21,13 @@ import {
   GlobalMetrics,
   OptimizeResponse,
   PendingProposal,
+  ResultState,
+  SuggestedAction,
   confirmChatProposal,
   getChatHistory,
   getConstraints,
   getResultsMetrics,
+  getResultState,
   rejectChatProposal,
   runOptimize,
   sendChatMessage,
@@ -96,6 +99,8 @@ export function useWorkspace() {
   const [sending, setSending] = useState(false);
   const [solving, setSolving] = useState(false);
   const [constraintsSummary, setConstraintsSummary] = useState<ConstraintsSummary | null>(null);
+  const [resultState, setResultState] = useState<ResultState | null>(null);
+  const [suggestions, setSuggestions] = useState<SuggestedAction[]>([]);
   // Bumped whenever anything the inspector panels read has changed on the
   // server: a rule confirmed, a checklist column added, the class count
   // set from chat. Panels take it as a `refreshKey` and re-fetch. This is
@@ -124,6 +129,14 @@ export function useWorkspace() {
     }
   }, []);
 
+  const refreshResultState = useCallback(async () => {
+    try {
+      setResultState(await getResultState());
+    } catch {
+      // The top-bar state is helpful but must not block the workspace.
+    }
+  }, []);
+
   const loadHistory = useCallback(async () => {
     if (loadedRef.current) return;
     loadedRef.current = true;
@@ -143,7 +156,8 @@ export function useWorkspace() {
       // fresh session with no history yet -- fine, start empty
     }
     void refreshConstraintsSummary();
-  }, [refreshConstraintsSummary]);
+    void refreshResultState();
+  }, [refreshConstraintsSummary, refreshResultState]);
 
   useEffect(() => {
     (async () => {
@@ -171,13 +185,15 @@ export function useWorkspace() {
           bumpDataVersion();
           void refreshConstraintsSummary();
         }
+        if (res.result_state) setResultState(res.result_state);
+        setSuggestions(res.suggestions ?? []);
         if (res.pending_proposal) {
           append({ id: uid(), kind: "constraint_proposal", at: Date.now(), proposal: res.pending_proposal, status: "pending" });
         } else {
           append({ id: uid(), kind: "assistant_message", at: Date.now(), text: res.reply });
         }
       } catch (err) {
-        toast.error(err instanceof ApiError ? err.message : "שגיאה בשליחת ההודעה");
+        toast.error(err instanceof ApiError ? err.message : "לא הצלחתי לשלוח את ההודעה");
       } finally {
         setSending(false);
       }
@@ -197,6 +213,7 @@ export function useWorkspace() {
           append({ id: uid(), kind: "constraint_event", at: Date.now(), action: "applied", label: result?.label_hebrew ?? "הכלל עודכן" });
           bumpDataVersion();
           void refreshConstraintsSummary();
+          void refreshResultState();
         } else {
           await rejectChatProposal();
           setTimeline((prev) =>
@@ -204,10 +221,10 @@ export function useWorkspace() {
           );
         }
       } catch (err) {
-        toast.error(err instanceof ApiError ? err.message : "שגיאה בעדכון ההצעה");
+        toast.error(err instanceof ApiError ? err.message : "לא הצלחתי לעדכן את ההצעה");
       }
     },
-    [append, refreshConstraintsSummary, bumpDataVersion]
+    [append, refreshConstraintsSummary, refreshResultState, bumpDataVersion]
   );
 
   const runSolve = useCallback(async () => {
@@ -215,6 +232,7 @@ export function useWorkspace() {
     setSolving(true);
     try {
       const res: OptimizeResponse = await runOptimize();
+      if (res.result_state) setResultState(res.result_state);
       if (res.is_feasible) {
         const metrics = await getResultsMetrics();
         append({ id: uid(), kind: "solve_result", at: Date.now(), metrics });
@@ -261,7 +279,7 @@ export function useWorkspace() {
         void refreshConstraintsSummary();
       }
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "שגיאה בהרצת השיבוץ");
+      toast.error(err instanceof ApiError ? err.message : "לא הצלחתי ליצור את השיבוץ");
     } finally {
       setSolving(false);
     }
@@ -311,7 +329,10 @@ export function useWorkspace() {
     sending,
     solving,
     constraintsSummary,
+    resultState,
+    suggestions,
     refreshConstraintsSummary,
+    refreshResultState,
     dataVersion,
     bumpDataVersion,
     sendMessage,

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import io
 from dataclasses import asdict
+from typing import Optional
 
 import pandas as pd
 
-from src.column_mapping import FIELD_STUDENT_ID
+from src.column_mapping import DEFAULT_GUESS_MAP, FIELD_STUDENT_ID
 from src.constraints import Constraint
+from src.data_requirements import DataRequirement, match_requirements
+from src.dataset_schema import DatasetSchema
 from src.metrics import class_overview_table, compute_global_metrics, student_assignment_table, violations_report
 from src.optimizer import SolverConfig
 
@@ -151,5 +154,46 @@ def export_to_excel(
             raw_export = raw_source_df.copy()
             raw_export.to_excel(writer, sheet_name="נתוני מקור", index=False)
             _autofit_and_style(writer.sheets["נתוני מקור"], raw_export, workbook)
+
+    return buffer.getvalue()
+
+
+def export_template_excel(
+    raw_df: Optional[pd.DataFrame],
+    requirements: list[DataRequirement],
+    schema: Optional[DatasetSchema],
+) -> bytes:
+    """The counselor's workbook to fill in, updated for whatever the
+    planning conversation has decided since it was last exported.
+
+    With no workbook loaded yet, this is a blank header row: the base
+    fields the app always needs plus one column per rule discussed so far
+    that needs data behind it. With one already loaded, existing rows and
+    columns are carried over untouched and only the still-missing
+    requirement columns are appended empty -- so filling this in is just
+    adding what's new, not redoing the whole file.
+    """
+    missing_labels = [m["label"] for m in match_requirements(requirements, schema) if not m["satisfied"]]
+
+    if raw_df is not None:
+        template_df = raw_df.copy()
+        for label in missing_labels:
+            if label not in template_df.columns:
+                template_df[label] = None
+    else:
+        columns = list(DEFAULT_GUESS_MAP.values()) + missing_labels
+        template_df = pd.DataFrame(columns=columns)
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        template_df.to_excel(writer, sheet_name="תבנית למילוי", index=False)
+        worksheet = writer.sheets["תבנית למילוי"]
+        _autofit_and_style(worksheet, template_df, workbook)
+        if missing_labels:
+            new_col_fmt = workbook.add_format({"bold": True, "bg_color": "#FFF2CC", "border": 1})
+            for label in missing_labels:
+                col_idx = list(template_df.columns).index(label)
+                worksheet.write(0, col_idx, label, new_col_fmt)
 
     return buffer.getvalue()

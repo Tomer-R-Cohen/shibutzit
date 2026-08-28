@@ -1,9 +1,8 @@
 # SPEC — שיבוץ תלמידות לכיתות ז' (Class Assignment App)
 
 Roadmap in five stages. Stages 1–4 are built and working end to end;
-stage 5 is not yet started. (Verified 2026-08-13: 76/76 backend tests
-pass, frontend `tsc`/`eslint`/`next build` all clean after syncing
-dependencies — see "Verification" at the bottom.)
+stage 5 is in progress. (Verified 2026-08-25: 125 backend tests pass,
+frontend TypeScript is clean, and ESLint reports no errors.)
 
 ---
 
@@ -75,20 +74,24 @@ scattered booleans in `page.tsx`.
   state instead of calling the real backend, for screenshotting
   LLM-gated states without an API key (`lib/fixtures.ts`,
   `FixturePreview.tsx`) — never active in production builds.
-- **Known gap carried forward, not a regression**: the full class-board
-  results view (`ClassWall`/`RosterWorkbench` "Milestone 2", per
-  in-code comments in `page.tsx`, `DatasetOnboarding.tsx`,
-  `SolveArtifacts.tsx`) is not yet wired into this new shell — clicking
-  into results today shows a toast ("מסך הכיתות המלא בפיתוח") instead of
-  the board. The old `ClassBoard.tsx`/`ClassWall.tsx`/`StudentDrawer.tsx`
-  components still exist but aren't mounted from `page.tsx`. This is the
-  next real gap, not Stage 5 polish — see Stage 5.
+- The full roster editor and class-board workbenches are wired into the
+  workspace as full-screen dialogs. The result board supports moving and
+  locking students, category filtering, student detail, and export.
 
-## Stage 5 — Class-board integration, hardening & client handoff 🔲 not started
+## Stage 5 — Correctness hardening & client handoff 🟨 in progress
 
-- Wire a results/class-board view into the new workspace shell — mount
-  or rebuild `ClassWall`/`RosterWorkbench` behind `openResults()` in
-  `page.tsx` instead of the current placeholder toast.
+- ✅ Server-owned input/solve revisions now determine whether a result is
+  current; the browser timeline is narrative only.
+- ✅ Manual adjustments are explicitly distinguished from solver output.
+- ✅ Roster edits invalidate validation/friendship caches, retain extra
+  school-specific columns, and rebuild those inputs before every solve.
+- ✅ Agent follow-up actions are structured API data rather than parsed
+  from Markdown formatting.
+- ✅ Session writes use atomic file replacement.
+- Add frontend component/end-to-end coverage for the principal user flows.
+- Model missing manual category values as unknown rather than false.
+- Add a detailed solver audit artifact with objective contributions and
+  optimality information.
 - Fill in the placeholder support-contact section of `CLIENT_SPEC.md`.
 - Decide and document a real answer for the illegible `סריקה.5.pdf`
   target distribution (currently: manual entry only, no OCR attempted).
@@ -108,7 +111,8 @@ above stages actually work, not just compile:
 - **Backend**: `.venv` was missing `openai` and had a `httpx`/`starlette`
   mismatch (`starlette` needs `httpx2` for its `TestClient`, which wasn't
   installed) — both fixed by `pip install -r requirements.txt`. After
-  that, `pytest tests/ -v` → **76/76 passed** (validation, friendships,
+  that, `pytest tests/ -v` passed. Current verification on 2026-08-25:
+  **125/125 passed** (validation, friendships,
   feasibility, optimizer, tokenization, mention resolution, tool schemas,
   chat router, narration, optimize router).
 - **Frontend**: `node_modules` was missing `@radix-ui/react-dialog` and

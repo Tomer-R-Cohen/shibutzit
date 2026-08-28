@@ -40,7 +40,15 @@ function thresholdsOf(constraints: ConstraintModel[]): Thresholds {
  * exists -- reuses ClassWall/StudentDrawer as-is (unchanged since the
  * earlier step-based UI), just re-fed from the workspace's own state.
  */
-export default function ResultsBoard({ open, onClose }: { open: boolean; onClose: () => void }) {
+export default function ResultsBoard({
+  open,
+  onClose,
+  onResultChanged,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onResultChanged?: () => void;
+}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [students, setStudents] = useState<StudentRow[]>([]);
@@ -60,7 +68,7 @@ export default function ResultsBoard({ open, onClose }: { open: boolean; onClose
           setThresholds(thresholdsOf(c.constraints));
           setNumClasses(rc.num_classes);
         })
-        .catch((e) => setError(e instanceof ApiError ? e.message : "שגיאה בטעינת התוצאות"))
+        .catch((e) => setError(e instanceof ApiError ? e.message : "לא הצלחנו לטעון את התוצאות"))
         .finally(() => setLoading(false));
     })();
   }, [open]);
@@ -74,23 +82,25 @@ export default function ResultsBoard({ open, onClose }: { open: boolean; onClose
     setStudents((prev) => prev.map((s) => (s["מזהה"] === studentId ? { ...s, "כיתה משובצת": newClass } : s)));
     try {
       await moveStudent(studentId, newClass, undefined);
-      toast.success(`${fullName(student)} → כיתה ${newClass}`, {
+      onResultChanged?.();
+      toast.success(`${fullName(student)} הועברה לכיתה ${newClass}`, {
         action: {
           label: "בטל",
           onClick: async () => {
             try {
               await moveStudent(studentId, Number(fromClass), undefined);
+              onResultChanged?.();
               setStudents((prev) => prev.map((s) => (s["מזהה"] === studentId ? { ...s, "כיתה משובצת": fromClass } : s)));
               toast.success("המעבר בוטל");
             } catch {
-              toast.error("שגיאה בביטול המעבר");
+              toast.error("לא הצלחנו לבטל את ההעברה");
             }
           },
         },
       });
     } catch (e) {
       setStudents((prev) => prev.map((s) => (s["מזהה"] === studentId ? { ...s, "כיתה משובצת": fromClass } : s)));
-      toast.error(e instanceof ApiError ? e.message : "שגיאה בעדכון השיבוץ");
+      toast.error(e instanceof ApiError ? e.message : "לא הצלחנו לעדכן את השיבוץ");
     }
   }
 
@@ -99,9 +109,10 @@ export default function ResultsBoard({ open, onClose }: { open: boolean; onClose
     const nextLocked = !selected["נעולה"];
     try {
       await moveStudent(selected["מזהה"], selected["כיתה משובצת"] as number, nextLocked);
+      onResultChanged?.();
       setStudents((prev) => prev.map((s) => (s["מזהה"] === selected["מזהה"] ? { ...s, "נעולה": nextLocked } : s)));
     } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : "שגיאה");
+      toast.error(e instanceof ApiError ? e.message : "לא הצלחנו לעדכן את הקיבוע");
     }
   }
 

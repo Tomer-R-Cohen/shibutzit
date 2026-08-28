@@ -13,8 +13,8 @@ export function Button({
   size?: "sm" | "md";
 }) {
   const variants: Record<string, string> = {
-    primary: "bg-[var(--cw-accent)] text-white hover:bg-[var(--cw-accent-strong)] disabled:bg-[var(--cw-line)] disabled:text-[var(--cw-ink-3)]",
-    secondary: "bg-[var(--cw-panel)] text-[var(--cw-ink)] border border-[var(--cw-line)] hover:bg-[var(--cw-line-2)]",
+    primary: "bg-[var(--cw-accent)] text-white shadow-[0_2px_6px_color-mix(in_srgb,var(--cw-accent)_12%,transparent)] hover:bg-[var(--cw-accent-strong)] disabled:bg-[var(--cw-line)] disabled:text-[var(--cw-ink-3)] disabled:shadow-none",
+    secondary: "bg-[var(--cw-card)] text-[var(--cw-ink)] border border-[var(--cw-line)] shadow-[0_1px_2px_rgba(22,32,51,0.04)] hover:bg-[var(--cw-panel)] hover:border-[color-mix(in_srgb,var(--cw-accent)_18%,var(--cw-line))]",
     ghost: "bg-transparent text-[var(--cw-ink-2)] hover:bg-[var(--cw-line-2)] hover:text-[var(--cw-ink)]",
     danger: "bg-[var(--cw-crit)] text-white hover:opacity-90",
   };
@@ -22,7 +22,7 @@ export function Button({
   return (
     <button
       className={clsx(
-        "rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+        "rounded-xl font-medium transition-[background-color,border-color,color,box-shadow,transform] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100",
         variants[variant],
         sizes[size],
         className

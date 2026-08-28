@@ -11,8 +11,8 @@ import { Icon } from "@/components/Icon";
  * SDK it ships with. Enter sends, Shift+Enter inserts a newline.
  *
  * The draft lives in the parent rather than here, because the first-run
- * launcher sits outside this component and fills it -- same click-to-fill
- * contract the suggestion chips already used, just from further away.
+ * launcher (and the inline follow-up suggestions in the timeline) sit
+ * outside this component and fill it -- click-to-fill from further away.
  */
 export interface ComposerHandle {
   focus: () => void;
@@ -24,7 +24,6 @@ export default function Composer({
   onSend,
   sending,
   placeholder,
-  suggestions,
   ref,
 }: {
   value: string;
@@ -32,7 +31,6 @@ export default function Composer({
   onSend: (text: string) => void;
   sending: boolean;
   placeholder: string;
-  suggestions: string[];
   ref?: RefObject<ComposerHandle | null>;
 }) {
   const input = value;
@@ -62,25 +60,8 @@ export default function Composer({
     }
   }
 
-  // Chips fill the composer rather than sending immediately -- the user
-  // still reviews and presses send, which keeps the confirm-before-act
-  // model the rest of the product follows.
-  function applySuggestion(text: string) {
-    setInput(text);
-    textareaRef.current?.focus();
-  }
-
   return (
     <div className="ws-composer-row">
-      {suggestions.length > 0 && !input && (
-        <div className="ws-composer-suggestions">
-          {suggestions.map((s) => (
-            <button key={s} type="button" className="ws-suggestion-chip" onClick={() => applySuggestion(s)} disabled={sending}>
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
       <form
         className="ws-composer-surface"
         onSubmit={(e) => {

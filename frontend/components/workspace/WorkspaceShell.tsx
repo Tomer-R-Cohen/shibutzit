@@ -35,7 +35,7 @@ export default function WorkspaceShell({
         {conversation}
         {inspector}
         {inspectorOpen && (
-          <button type="button" className="ws-insp-scrim" aria-label="סגירת מצב נוכחי" onClick={onCloseInspector} />
+          <button type="button" className="ws-insp-scrim" aria-label="סגירת תמונת המצב" onClick={onCloseInspector} />
         )}
       </div>
     </div>

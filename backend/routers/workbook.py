@@ -96,6 +96,15 @@ def load_workbook_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
     sess.loaded_wb = wb
+    sess.mapped_df = None
+    sess.mark_inputs_changed(data_changed=True, clear_result=True)
+    # Keep a persisted mapping only when every referenced source column is
+    # present in the newly loaded workbook. Otherwise force a fresh guess.
+    if sess.col_mapping is not None:
+        available = set(wb.raw_df.columns)
+        referenced = {c for c in sess.col_mapping.mapping.values() if c is not None}
+        if not referenced.issubset(available):
+            sess.col_mapping = None
     return {
         "row_count": len(wb.raw_df),
         "active_sheet": wb.active_sheet,
@@ -187,6 +196,7 @@ def apply_mapping_endpoint(req: MappingSetRequest, x_session_id: str = Header(..
     ensure_defaults_seeded(sess, mapped)
     sync_class_size_bounds(sess, mapped)
     adjusted = clamp_zero_minimums(sess.constraints, mapped)
+    sess.mark_inputs_changed(data_changed=True, clear_result=True)
     store.save(sess)
 
     return {
@@ -240,9 +250,15 @@ def update_manual_entry(payload: dict, x_session_id: str = Header(...)):
         mapped = apply_mapping(wb.raw_df, cm, manual_df=new_df)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if sess.dataset_schema.extras:
+        try:
+            mapped = attach_extra_columns(mapped, wb.raw_df, sess.dataset_schema)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     sess.mapped_df = mapped
     ensure_defaults_seeded(sess, mapped)
     clamp_zero_minimums(sess.constraints, mapped)
+    sess.mark_inputs_changed(data_changed=True, clear_result=True)
     store.save(sess)
     return {"student_count": len(mapped), "manual_entry": df_records(new_df)}
 
@@ -262,5 +278,16 @@ def import_manual_entry(file: UploadFile = File(...), x_session_id: str = Header
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"שגיאה בייבוא: {e}")
     sess.manual_entry_df = imported
+    cm = require(sess.col_mapping, "×™×© ×œ×”×©×œ×™× ×ž×™×¤×•×™ ×¢×ž×•×“×•×ª ×ª×—×™×œ×”.")
+    try:
+        mapped = apply_mapping(sess.loaded_wb.raw_df, cm, manual_df=imported)
+        if sess.dataset_schema.extras:
+            mapped = attach_extra_columns(mapped, sess.loaded_wb.raw_df, sess.dataset_schema)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"×©×’×™××” ×‘×”×—×œ×ª ×”×™×™×‘×•×: {e}")
+    sess.mapped_df = mapped
+    ensure_defaults_seeded(sess, mapped)
+    clamp_zero_minimums(sess.constraints, mapped)
+    sess.mark_inputs_changed(data_changed=True, clear_result=True)
     store.save(sess)
     return {"rows": df_records(imported)}

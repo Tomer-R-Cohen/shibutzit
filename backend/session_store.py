@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import tempfile
 import threading
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Optional
@@ -87,6 +88,43 @@ class Session:
     chat_history: list[dict] = field(default_factory=list)
     pending_proposal: Optional[PendingProposal] = None
     token_map: TokenMap = field(default_factory=TokenMap)
+    # Monotonic version of every input that can affect the solver. A
+    # successful solve records the exact version it consumed. This makes
+    # result freshness authoritative on the server instead of inferred from
+    # an ephemeral browser timeline.
+    input_revision: int = 0
+    solve_revision: Optional[int] = None
+    result_mode: Literal["solver", "manual"] = "solver"
+
+    def mark_inputs_changed(self, *, data_changed: bool = False, clear_result: bool = False) -> None:
+        self.input_revision += 1
+        self.feasibility_report = None
+        if data_changed:
+            self.validation_report = None
+            self.friendship_result = None
+            self.unmatched_df = None
+        if clear_result:
+            self.opt_result = None
+            self.adjustment_state = None
+            self.solve_revision = None
+            self.result_mode = "solver"
+
+    def mark_solved(self) -> None:
+        self.solve_revision = self.input_revision
+        self.result_mode = "solver"
+
+    def mark_manually_adjusted(self) -> None:
+        self.result_mode = "manual"
+
+    def result_state(self) -> dict:
+        has_result = bool(self.opt_result is not None and self.opt_result.is_feasible and self.adjustment_state is not None)
+        return {
+            "has_result": has_result,
+            "is_stale": has_result and self.solve_revision != self.input_revision,
+            "input_revision": self.input_revision,
+            "solve_revision": self.solve_revision,
+            "result_mode": self.result_mode if has_result else None,
+        }
 
 
 class SessionStore:
@@ -150,14 +188,29 @@ class SessionStore:
                 "id_to_token": sess.token_map.id_to_token,
                 "token_to_id": sess.token_map.token_to_id,
             },
+            "input_revision": sess.input_revision,
+            "solve_revision": sess.solve_revision,
+            "result_mode": sess.result_mode,
         }
         try:
             with self._lock:
-                with open(self._path(sess.id), "wb") as f:
+                target = self._path(sess.id)
+                # Write beside the target and atomically replace it. A crash
+                # or power loss can no longer leave a half-written pickle
+                # that silently discards the counselor's saved inputs.
+                fd, tmp_path = tempfile.mkstemp(prefix=".session-", suffix=".tmp", dir=PERSIST_DIR)
+                with os.fdopen(fd, "wb") as f:
                     pickle.dump(payload, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, target)
         except Exception:
             # Persistence is a convenience, not a correctness requirement.
-            pass
+            try:
+                if "tmp_path" in locals() and os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
 
     def _restore(self, sess: Session) -> None:
         """Load persisted inputs into a freshly-created session. Called while
@@ -245,6 +298,15 @@ class SessionStore:
                 id_to_token=tm.get("id_to_token", {}),
                 token_to_id=tm.get("token_to_id", {}),
             )
+
+        try:
+            sess.input_revision = max(0, int(payload.get("input_revision", 0)))
+            raw_solve_revision = payload.get("solve_revision")
+            sess.solve_revision = int(raw_solve_revision) if raw_solve_revision is not None else None
+            mode = payload.get("result_mode", "solver")
+            sess.result_mode = mode if mode in ("solver", "manual") else "solver"
+        except (TypeError, ValueError):
+            pass
 
 
 store = SessionStore()

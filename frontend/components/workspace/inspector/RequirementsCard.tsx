@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import clsx from "clsx";
 import { toast } from "sonner";
 import { Icon } from "@/components/Icon";
-import { DataRequirement, deleteDataRequirement, getDataRequirements } from "@/lib/api";
+import { Button } from "@/components/ui/primitives";
+import { DataRequirement, deleteDataRequirement, fetchTemplateBlob, getDataRequirements } from "@/lib/api";
 
 /**
  * The Excel checklist: what the planning conversation decided the file has
@@ -19,6 +20,7 @@ import { DataRequirement, deleteDataRequirement, getDataRequirements } from "@/l
 export default function RequirementsCard({ refreshKey }: { refreshKey?: number }) {
   const [reqs, setReqs] = useState<DataRequirement[] | null>(null);
   const [hasDataset, setHasDataset] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   const load = useCallback(() => {
     getDataRequirements()
@@ -36,7 +38,29 @@ export default function RequirementsCard({ refreshKey }: { refreshKey?: number }
       await deleteDataRequirement(id);
       load();
     } catch {
-      toast.error("שגיאה בהסרת העמודה");
+      toast.error("לא הצלחתי להסיר את העמודה");
+    }
+  }
+
+  // Downloads (rather than a bare link) so the missing-column highlight
+  // stays accurate as of *this* click -- the checklist can change every
+  // turn, and a static href would go stale the moment a new rule lands.
+  async function downloadTemplate() {
+    setDownloading(true);
+    try {
+      const blob = await fetchTemplateBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = hasDataset ? "shibutz_tavnit_lemilui.xlsx" : "shibutz_tavnit.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("לא הצלחתי להוריד את התבנית");
+    } finally {
+      setDownloading(false);
     }
   }
 
@@ -53,7 +77,7 @@ export default function RequirementsCard({ refreshKey }: { refreshKey?: number }
         <span className="ws-insp-icon-lg">
           <Icon name="file" size={16} />
         </span>
-        <span className="ws-insp-card-title">עמודות להכנה באקסל</span>
+        <span className="ws-insp-card-title">העמודות שצריך להכין</span>
       </div>
 
       <div className="ws-req-list">
@@ -85,10 +109,17 @@ export default function RequirementsCard({ refreshKey }: { refreshKey?: number }
       <p className="ws-insp-strip" style={{ margin: 0 }}>
         {hasDataset
           ? missing === 0
-            ? "כל העמודות נמצאו בקובץ."
-            : `חסרות ${missing} עמודות בקובץ שנטען.`
-          : "הוסיפו את העמודות האלה לאקסל לפני הטעינה."}
+            ? "כל העמודות הדרושות נמצאו בקובץ."
+            : `בקובץ חסרות ${missing} עמודות.`
+          : "הוסיפו את העמודות האלה לקובץ לפני ההעלאה."}
       </p>
+
+      {(!hasDataset || missing > 0) && (
+        <Button size="sm" variant="secondary" onClick={downloadTemplate} disabled={downloading}>
+          <Icon name="download" size={13} />
+          {downloading ? "מכינה את הקובץ…" : hasDataset ? "הורדת הקובץ עם העמודות החסרות" : "הורדת תבנית למילוי"}
+        </Button>
+      )}
     </div>
   );
 }

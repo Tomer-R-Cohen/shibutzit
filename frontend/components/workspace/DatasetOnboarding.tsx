@@ -1,6 +1,6 @@
 "use client";
 
-import { DragEvent, useCallback, useEffect, useRef, useState } from "react";
+import { DragEvent, useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import clsx from "clsx";
 import { Button } from "@/components/ui/primitives";
@@ -93,7 +93,7 @@ export default function DatasetOnboarding({
       setFlag("mapped", true);
       await finishReady(guess.problems);
     } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : "שגיאה בטעינת הקובץ");
+      toast.error(e instanceof ApiError ? e.message : "לא הצלחתי לטעון את הקובץ");
       setPhase("needsFile");
     } finally {
       setBusy(false);
@@ -168,7 +168,7 @@ export default function DatasetOnboarding({
               בחירת קובץ
             </Button>
             <Button variant="secondary" onClick={() => void loadSampleFile()} disabled={busy}>
-              {busy ? "טוען…" : "קובץ לדוגמה"}
+              {busy ? "טוענת…" : "שימוש בקובץ לדוגמה"}
             </Button>
           </div>
         </div>
