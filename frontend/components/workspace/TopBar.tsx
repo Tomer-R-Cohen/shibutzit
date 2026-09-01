@@ -45,6 +45,7 @@ export default function TopBar({
   onToggleInspector,
   onUploadData,
   onStartOver,
+  showRunStatus = true,
 }: {
   runState: RunState;
   onRunSolve: () => void;
@@ -55,6 +56,8 @@ export default function TopBar({
   onUploadData?: () => void;
   /** Discard this session and go back to the first screen. */
   onStartOver?: () => void;
+  /** Entry/upload screens have no assignment context to report yet. */
+  showRunStatus?: boolean;
 }) {
   const solving = runState === "solving";
 
@@ -67,13 +70,15 @@ export default function TopBar({
         <div className="ws-brand-title">שיבוצית</div>
       </div>
 
-      <span
-        className={clsx("ws-runstate", (runState === "fresh" || runState === "adjusted") && "fresh", runState === "stale" && "stale", solving && "busy")}
-        aria-live="polite"
-      >
-        <span className="dot" aria-hidden />
-        {onUploadData ? "בשלב התכנון · עדיין אין קובץ" : RUN_STATE_TEXT[runState]}
-      </span>
+      {showRunStatus && (
+        <span
+          className={clsx("ws-runstate", (runState === "fresh" || runState === "adjusted") && "fresh", runState === "stale" && "stale", solving && "busy")}
+          aria-live="polite"
+        >
+          <span className="dot" aria-hidden />
+          {onUploadData ? "בשלב התכנון · עדיין אין קובץ" : RUN_STATE_TEXT[runState]}
+        </span>
+      )}
 
       <div className="ws-topbar-spacer" />
 
@@ -82,8 +87,9 @@ export default function TopBar({
             had data: the app probes for a roster on load and goes
             straight to the workspace. This is the way back. */}
         {onStartOver && (
-          <button type="button" className="ws-startover" onClick={onStartOver}>
-            התחלה חדשה
+          <button type="button" className="ws-startover" onClick={onStartOver} aria-label="התחלה חדשה">
+            <span className="ws-action-long">התחלה חדשה</span>
+            <span className="ws-action-short" aria-hidden>חדש</span>
           </button>
         )}
         {onToggleInspector && (
@@ -93,21 +99,23 @@ export default function TopBar({
             onClick={onToggleInspector}
             aria-expanded={!!inspectorOpen}
             aria-controls="ws-inspector"
+            aria-label="תמונת מצב"
           >
             <Icon name="list" size={14} />
-            תמונת מצב
+            <span className="ws-action-long">תמונת מצב</span>
           </button>
         )}
         {/* Planning mode has no roster, so "run" is meaningless and loading
             the file is the real next step. */}
         {onUploadData ? (
-          <Button onClick={onUploadData}>
+          <Button onClick={onUploadData} aria-label="העלאת קובץ">
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
               <Icon name="upload" size={14} />
-              העלאת קובץ
+              <span className="ws-action-long">העלאת קובץ</span>
+              <span className="ws-action-short" aria-hidden>קובץ</span>
             </span>
           </Button>
-        ) : (
+        ) : showRunStatus ? (
         <>
         {/* Once a result exists the run button stops being the loudest thing
             on screen -- unless the rules moved under it, in which case it
@@ -116,11 +124,13 @@ export default function TopBar({
           variant={runState === "fresh" || runState === "adjusted" ? "secondary" : "primary"}
           disabled={!canSolve || solving}
           onClick={onRunSolve}
+          aria-label={RUN_ACTION_TEXT[runState]}
         >
-          {RUN_ACTION_TEXT[runState]}
+          <span className="ws-action-long">{RUN_ACTION_TEXT[runState]}</span>
+          <span className="ws-action-short" aria-hidden>{solving ? "מכינה…" : "שיבוץ"}</span>
         </Button>
         </>
-        )}
+        ) : null}
       </div>
     </header>
   );

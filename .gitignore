@@ -27,3 +27,6 @@ awesome-ux-skills/
 
 # Stray screenshots / scratch images at repo root
 /image.png
+
+# Generated local browser audits, screenshots, and exported test workbooks
+/.codex-artifacts/

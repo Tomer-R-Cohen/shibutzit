@@ -20,20 +20,51 @@ export default function ConstraintBrowser({
   refreshKey,
   highlight,
   onHighlight,
+  previewConstraints,
 }: {
   onSelect: (id: string) => void;
   onBack: () => void;
   refreshKey?: number;
   highlight?: Highlight;
   onHighlight?: (h: Highlight) => void;
+  /** Development-only deterministic data for rendered fixture audits. */
+  previewConstraints?: ConstraintModel[];
 }) {
-  const [constraints, setConstraints] = useState<ConstraintModel[] | null>(null);
+  const [constraints, setConstraints] = useState<ConstraintModel[] | null>(previewConstraints ?? null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
+    if (previewConstraints) return;
     getConstraints()
-      .then((r) => setConstraints(r.constraints))
-      .catch(() => toast.error("לא הצלחתי לטעון את רשימת הכללים"));
-  }, [refreshKey]);
+      .then((r) => {
+        setLoadError(null);
+        setConstraints(r.constraints);
+      })
+      .catch(() => {
+        setLoadError("לא הצלחנו לטעון את רשימת הכללים.");
+        toast.error("לא הצלחתי לטעון את רשימת הכללים");
+      });
+  }, [refreshKey, previewConstraints, retryKey]);
+
+  function retry() {
+    setLoadError(null);
+    setConstraints(null);
+    setRetryKey((value) => value + 1);
+  }
+
+  if (loadError) {
+    return (
+      <div className="ws-insp-section">
+        <button className="ws-insp-back" onClick={onBack}><Icon name="chevron" size={13} style={{ transform: "rotate(90deg)" }} />חזרה</button>
+        <div className="ws-inline-error" role="alert">
+          <Icon name="warning" size={16} />
+          <div><strong>הכללים לא נטענו</strong><span>{loadError}</span></div>
+          <button type="button" onClick={retry}>ניסיון נוסף</button>
+        </div>
+      </div>
+    );
+  }
 
   if (!constraints) return <Skeleton className="h-64 w-full" />;
 
@@ -64,25 +95,31 @@ export default function ConstraintBrowser({
         <Icon name="chevron" size={13} style={{ transform: "rotate(90deg)" }} />
         חזרה
       </button>
-      <div className="ws-insp-title">כל הכללים</div>
+      <div className="ws-rule-browser-head">
+        <div>
+          <div className="ws-insp-title">כללי השיבוץ</div>
+          <p>זהו המידע שהמערכת תעביר לשיבוץ הבא.</p>
+        </div>
+        <span className="ws-rule-total" aria-label={`${constraints.length} כללים`}>{constraints.length}</span>
+      </div>
 
       {hard.length > 0 && (
         <div className="ws-rule-group">
-          <div className="ws-rule-group-title">כללי חובה</div>
+          <div className="ws-rule-group-title"><span>חובה</span><b>{hard.length}</b></div>
           {hard.map((c) => row(c, "hard"))}
         </div>
       )}
 
       {soft.length > 0 && (
         <div className="ws-rule-group">
-          <div className="ws-rule-group-title">כללים מועדפים</div>
+          <div className="ws-rule-group-title"><span>העדפות ויעדים</span><b>{soft.length}</b></div>
           {soft.map((c) => row(c, "soft"))}
         </div>
       )}
 
       {inactive.length > 0 && (
         <div className="ws-rule-group">
-          <div className="ws-rule-group-title">לא פעילים</div>
+          <div className="ws-rule-group-title"><span>לא פעילים</span><b>{inactive.length}</b></div>
           {inactive.map((c) => row(c, "soft", " inactive"))}
         </div>
       )}

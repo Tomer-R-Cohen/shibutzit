@@ -30,7 +30,12 @@ def solved_headers(client):
     store.reset(session_id)
     headers = {"X-Session-Id": session_id}
     client.post("/api/session", headers=headers)
-    client.post("/api/workbook/load", headers=headers)
+    with patch("backend.routers.workbook.DEFAULT_WORKBOOK_PATH", "רשימה כללית לאיזונית.xlsx"):
+        client.post(
+            "/api/workbook/load",
+            headers=headers,
+            params={"header_row": 4, "first_data_row": 5, "last_data_row": 221},
+        )
     guess = client.get("/api/mapping/guess", headers=headers).json()
     client.post(
         "/api/mapping/apply",
@@ -178,6 +183,83 @@ def test_bad_simulation_arguments_come_back_as_data(solved_headers):
     assert execute_simulation_tool("simulate_capacity_change", {"constraint_id": rule.id, "min": 40, "max": 30}, sess)["error"] == "bad_arguments"
     assert execute_simulation_tool("simulate_class_count", {"num_classes": 99}, sess)["error"] == "bad_arguments"
     assert execute_simulation_tool("simulate_rule_toggle", {"constraint_id": rule.id}, sess)["error"] == "bad_arguments"
+
+
+def test_friendship_priority_simulation_is_real_and_non_mutating(solved_headers):
+    sess = store.get_or_create(solved_headers["X-Session-Id"])
+    objective = next(c for c in sess.constraints if c.type == "friendship_objective")
+    before = copy.deepcopy(objective.args)
+    out = execute_simulation_tool(
+        "simulate_friendship_priority",
+        {
+            "constraint_id": objective.id,
+            "weight_two_friends": int(objective.args.get("weight_two_friends", 0)) + 2,
+        },
+        sess,
+    )
+    assert "error" not in out, out
+    assert out["feasible"] is True
+    assert "before" in out and "after" in out and "deltas" in out
+    assert objective.args == before, "a friendship trial must not change the active priorities"
+
+
+def test_class_size_move_search_returns_only_measured_safe_moves_and_does_not_mutate(solved_headers):
+    sess = store.get_or_create(solved_headers["X-Session-Id"])
+    assignment_before = dict(sess.adjustment_state.assignment)
+
+    out = execute_simulation_tool("find_class_size_balance_moves", {}, sess)
+
+    assert "error" not in out, out
+    assert sess.adjustment_state.assignment == assignment_before
+    assert out["checked_direct_moves"] >= out["safe_direct_moves_found"]
+    for candidate in out["candidates"]:
+        assert candidate["after"]["violations"] == 0
+        assert candidate["from_class"] in out["largest_classes"]
+        assert candidate["to_class"] in out["smallest_classes"]
+        assert candidate["deltas"]["size_spread"] < 0
+
+
+def test_student_move_simulation_measures_direct_move_and_safe_swaps_without_mutating(solved_headers):
+    sess = store.get_or_create(solved_headers["X-Session-Id"])
+    assignment_before = dict(sess.adjustment_state.assignment)
+    student_id, source_class = next(iter(assignment_before.items()))
+    token = sess.token_map.token_for(student_id)
+    target_class = ((source_class + 1) % sess.run_config.num_classes) + 1
+
+    out = execute_simulation_tool(
+        "simulate_student_move",
+        {"student": token, "class_number": target_class},
+        sess,
+    )
+
+    assert "error" not in out, out
+    assert sess.adjustment_state.assignment == assignment_before
+    assert out["student"] == token
+    assert out["requested_move"] == {"from_class": source_class + 1, "to_class": target_class}
+    assert "mandatory_violations_after" in out["direct_move"]
+    assert "student_outcome_deltas" in out["direct_move"]
+    for candidate in out["compensating_swap_search"]["best_candidates"]:
+        assert candidate["after"]["violations"] == 0
+        assert "requested_student_deltas" in candidate
+        assert "swap_partner_deltas" in candidate
+
+
+def test_balance_priority_simulation_measures_the_target_and_is_non_mutating(solved_headers):
+    sess = store.get_or_create(solved_headers["X-Session-Id"])
+    objective = next(c for c in sess.constraints if c.type == "balance")
+    before = copy.deepcopy(objective.args)
+    out = execute_simulation_tool(
+        "simulate_balance_priority",
+        {"constraint_id": objective.id, "weight": float(objective.args.get("weight", 1)) + 2},
+        sess,
+    )
+
+    assert "error" not in out, out
+    assert out["feasible"] is True
+    assert out["targeted_balance"]["before"]["constraint_id"] == objective.id
+    assert out["targeted_balance"]["after"]["constraint_id"] == objective.id
+    assert "total_spread" in out["targeted_balance"]["before"]
+    assert objective.args == before, "a balance trial must not change the active priority"
 
 
 def test_simulation_budget_caps_solver_calls_per_turn(client, solved_headers):

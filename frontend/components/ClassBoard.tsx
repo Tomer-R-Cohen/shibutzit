@@ -22,7 +22,7 @@ export interface StudentRow {
   [key: string]: unknown;
 }
 
-export type CategoryKey = "מוצא אתיופי" | "שילוב" | 'ח"מ' | "דיפרנציאלית";
+export type CategoryKey = string;
 
 export function fullName(s: StudentRow) {
   const first = (s["שם פרטי"] ?? "").toString().trim();

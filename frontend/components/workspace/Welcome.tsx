@@ -5,31 +5,25 @@ import { Icon, IconName } from "@/components/Icon";
 /**
  * The first screen, and the one that decides what kind of product this is.
  *
- * What was here before was a dropzone: no file, no app. That put the work in
- * the wrong order, because the decisions -- how many classes, what has to be
- * kept apart, what merely matters -- are what determine which columns the
- * spreadsheet needs in the first place. A counselor who builds the file
- * first has already guessed at all of them.
- *
- * So there are two doors, and the left one is deliberately the larger:
- * plan first and let the file follow, or upload a file you already have.
- * Both land in the same workspace.
+ * Upload is the primary path. Planning without a file remains available for
+ * schools that are still preparing their roster, but it is intentionally a
+ * quiet secondary action rather than a competing product mode.
  */
 const STEPS: { icon: IconName; title: string; body: string }[] = [
   {
-    icon: "sparkle",
-    title: "מחליטים מה חשוב",
-    body: "נחליט לכמה כיתות לחלק, מה חייב להישמר ומה בגדר העדפה. אני אציע — ואתם תחליטו.",
+    icon: "upload",
+    title: "מעלים את רשימת התלמידות",
+    body: "אזהה את העמודות, בקשות החברות והמידע החסר ואציג מה הבנתי.",
   },
   {
-    icon: "file",
-    title: "מכינים את הקובץ",
-    body: "לפי ההחלטות שלנו אכין רשימה ברורה של העמודות שצריך למלא באקסל.",
+    icon: "sparkle",
+    title: "אומרים מה חשוב",
+    body: "כותבים בשפה חופשית. כל שינוי בכלל חובה יוצג לאישור לפני שייכנס לתוקף.",
   },
   {
     icon: "grid",
-    title: "מפיקים ובודקים",
-    body: "אפיק את השיבוץ, אציג את התוצאות ואעזור לבדוק חלופות ולשנות כללים לפי הצורך.",
+    title: "בודקים ומאשרים שיבוץ",
+    body: "מקבלים תמונת מצב ברורה, משווים חלופות ומייצאים רק כשמרוצים.",
   },
 ];
 
@@ -40,8 +34,8 @@ export default function Welcome({ onPlan, onUpload }: { onPlan: () => void; onUp
         <div className="ws-welcome-head">
           <h1>שיבוץ תלמידות לכיתות</h1>
           <p>
-            אפשר להעלות קובץ קיים ולהתחיל מיד, או לתכנן איתי קודם את הכללים ואת המידע שנצטרך.
-            בכל דרך שתבחרו, נתקדם יחד עד לשיבוץ שאפשר להבין ולבדוק.
+            מעלים אקסל, מספרים לי מה חשוב, ומקבלים שיבוץ מאוזן שאפשר להבין, לבדוק ולשנות.
+            אין צורך להכיר תוכנת אופטימיזציה או להגדיר מסכים מורכבים.
           </p>
         </div>
 
@@ -62,25 +56,20 @@ export default function Welcome({ onPlan, onUpload }: { onPlan: () => void; onUp
           ))}
         </ol>
 
-        <div className="ws-welcome-doors">
-          <button type="button" className="ws-door primary" onClick={onPlan}>
-            <span className="ico" aria-hidden>
-              <Icon name="sparkle" size={18} />
-            </span>
-            <span className="t">בואו נתכנן יחד</span>
-            <span className="b">מתחילים בשיחה. אין צורך בקובץ בשלב הזה.</span>
-          </button>
-
-          <button type="button" className="ws-door" onClick={onUpload}>
+        <div className="ws-welcome-primary">
+          <button type="button" className="ws-door primary" onClick={onUpload}>
             <span className="ico" aria-hidden>
               <Icon name="upload" size={18} />
             </span>
-            <span className="t">יש לי כבר קובץ</span>
-            <span className="b">מעלים אקסל עם רשימת התלמידות וממשיכים משם.</span>
+            <span className="t">העלאת קובץ אקסל</span>
+            <span className="b">המערכת תבדוק את הנתונים ותשאל רק מה שחסר.</span>
           </button>
         </div>
 
-        <p className="ws-welcome-foot">אפשר להעלות קובץ גם בהמשך, אחרי שנסיים לתכנן.</p>
+        <p className="ws-welcome-foot">
+          עדיין אין קובץ מוכן?{" "}
+          <button type="button" className="ws-link" onClick={onPlan}>אפשר לתכנן יחד קודם</button>
+        </p>
       </div>
     </div>
   );

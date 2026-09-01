@@ -1,10 +1,10 @@
 """Generate a small synthetic student workbook for tests and demos.
 
-Produces sample_data/synthetic_students.xlsx with ~28 clearly-fake students
-covering all category combinations (differential, inclusion, hamar,
-Ethiopian origin, academic levels) plus some friendship requests, laid out
-with the SAME physical shape as the real workbook (header on row 4, data
-starting row 5) so excel_loader/column_mapping can be exercised identically.
+Produces the small legacy synthetic_students.xlsx fixture and a larger
+conversational_demo_students.xlsx fixture. The latter contains explicit
+support categories and friendship requests for realistic conversational
+tradeoff demos. Both use clearly fake identities and the same physical shape
+as the real workbook (header on row 4, data starting row 5).
 """
 
 from __future__ import annotations
@@ -70,6 +70,88 @@ def write_workbook(path: str) -> None:
     wb.save(path)
 
 
+def build_conversational_rows(n: int = 72) -> list[dict]:
+    """A feasible roster whose social clusters compete with balance goals."""
+    schools = [f"בית ספר מקור {letter}" for letter in "אבגדהו"]
+    rows = []
+    for i in range(1, n + 1):
+        first = "תלמידה"
+        last = f"מדומה {i:02d}"
+        # Academic levels and source schools occur in blocks. Friendship
+        # rings also stay inside six-student blocks, creating a real tradeoff:
+        # keeping every ring intact is at odds with spreading levels/schools.
+        level = LEVELS[(i - 1) // 24]
+        school = schools[(i - 1) // 12]
+        group_start = ((i - 1) // 6) * 6 + 1
+        position = (i - group_start) % 6
+        friend_ids = [
+            group_start + ((position - 1) % 6),
+            group_start + ((position + 1) % 6),
+            ((i + 17 - 1) % n) + 1,
+        ]
+        friend_names = [f"תלמידה מדומה {friend_id:02d}" for friend_id in friend_ids]
+        rows.append(
+            {
+                "idx": i,
+                "last": last,
+                "first": first,
+                "school": school,
+                "cur_class": ((i - 1) % 6) + 1,
+                "origin": "א" if 28 <= i <= 45 else None,
+                "level": level,
+                "differential": "כן" if i <= 6 else None,
+                "inclusion": "כן" if 7 <= i <= 18 else None,
+                "hamar": "כן" if 19 <= i <= 27 else None,
+                "friends": ", ".join(friend_names),
+            }
+        )
+    return rows
+
+
+def write_conversational_workbook(path: str) -> None:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "תלמידות"
+    ws.sheet_view.rightToLeft = True
+    ws.cell(row=2, column=2, value="נתוני הדגמה אנונימיים לשיחה ואופטימיזציה")
+    headers = [
+        "מספר סידורי",
+        "שם משפחה",
+        "שם פרטי",
+        'ביה"ס נוכחי',
+        "כיתה",
+        "מוצא",
+        "הישגים לימודיים",
+        "תלמידה דיפרנציאלית",
+        "תלמידה בשילוב",
+        'סטטוס ח"מ',
+        "בקשות חברות (שמות, מופרד בפסיקים)",
+    ]
+    for column, header in enumerate(headers, start=1):
+        ws.cell(row=4, column=column, value=header)
+
+    target_row = 5
+    for index, row in enumerate(build_conversational_rows(), start=1):
+        values = [
+            row["idx"], row["last"], row["first"], row["school"], row["cur_class"],
+            row["origin"], row["level"], row["differential"], row["inclusion"],
+            row["hamar"], row["friends"],
+        ]
+        for column, value in enumerate(values, start=1):
+            ws.cell(row=target_row, column=column, value=value)
+        target_row += 1
+        if index in (24, 48):
+            target_row += 1
+
+    ws.freeze_panes = "A5"
+    widths = {1: 14, 2: 18, 3: 14, 4: 22, 5: 10, 6: 10, 7: 20, 8: 22, 9: 18, 10: 14, 11: 70}
+    for column, width in widths.items():
+        ws.column_dimensions[openpyxl.utils.get_column_letter(column)].width = width
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    wb.save(path)
+
+
 if __name__ == "__main__":
     write_workbook(os.path.join(os.path.dirname(__file__), "synthetic_students.xlsx"))
-    print("wrote synthetic_students.xlsx")
+    write_conversational_workbook(os.path.join(os.path.dirname(__file__), "conversational_demo_students.xlsx"))
+    print("wrote synthetic_students.xlsx and conversational_demo_students.xlsx")

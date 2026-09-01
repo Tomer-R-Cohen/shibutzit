@@ -67,7 +67,7 @@ def export_to_excel(
             red_fmt = workbook.add_format({"bg_color": "#FFC7CE"})
             ws_students.conditional_format(
                 1, warn_col, len(student_df), warn_col,
-                {"type": "text", "criteria": "not equal to", "value": "", "format": red_fmt},
+                {"type": "no_blanks", "format": red_fmt},
             )
 
         gm = compute_global_metrics(
@@ -83,6 +83,7 @@ def export_to_excel(
                 "גודל מינימלי": gm.class_size_min,
                 "גודל מקסימלי": gm.class_size_max,
                 "פער גדלים": gm.class_size_spread,
+                "פער בהרכב הלימודי": gm.academic_level_spread,
                 "תלמידות עם בקשות חברות": gm.students_with_requests,
                 "% חברות הדדית": gm.mutual_satisfied_pct,
                 "% 2+ חברות מבוקשות": gm.two_friends_satisfied_pct,
@@ -110,7 +111,7 @@ def export_to_excel(
             red_fmt = workbook.add_format({"bg_color": "#FFC7CE"})
             ws_viol.conditional_format(
                 1, sev_col, len(viol_df), sev_col,
-                {"type": "text", "criteria": "equal to", "value": "גבוהה", "format": red_fmt},
+                {"type": "cell", "criteria": "==", "value": '"גבוהה"', "format": red_fmt},
             )
 
         friend_rows = []

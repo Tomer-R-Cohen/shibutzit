@@ -69,6 +69,17 @@ DEFAULT_GUESS_MAP = {
     FIELD_ACADEMIC_LEVEL: "הישגים לימודיים",
 }
 
+OPTIONAL_GUESS_MAP = {
+    FIELD_DIFFERENTIAL: ("תלמידה דיפרנציאלית", "דיפרנציאלית"),
+    FIELD_INCLUSION: ("תלמידה בשילוב", "שילוב"),
+    FIELD_HAMAR: ('סטטוס ח"מ', 'ח"מ'),
+    FIELD_FRIEND_REQUESTS: (
+        "בקשות חברות (שמות, מופרד בפסיקים)",
+        "בקשות חברות",
+        "חברות מבוקשות",
+    ),
+}
+
 
 class ColumnMappingError(Exception):
     """Raised when a column mapping is invalid or incomplete."""
@@ -99,8 +110,8 @@ class ColumnMapping:
         """Return a list of human-readable problems (empty if valid)."""
         problems = []
         for f in REQUIRED_FIELDS:
-            if f in (FIELD_ETHIOPIAN_ORIGIN,):
-                continue  # may legitimately be optional/manual too
+            if f in (FIELD_STUDENT_ID, FIELD_ETHIOPIAN_ORIGIN):
+                continue  # id can be generated; origin may legitimately be absent
             col = self.mapping.get(f)
             if col is None and f not in self.manual_fields:
                 problems.append(f"השדה '{FIELD_LABELS_HE.get(f, f)}' לא מופה.")
@@ -167,9 +178,18 @@ def guess_mapping(columns: list[str], raw_df: Optional[pd.DataFrame] = None) -> 
         if guessed is not None:
             cm.set(FIELD_STUDENT_ID, guessed)
 
-    # Optional/manual fields default to "not present".
-    for f in OPTIONAL_MANUAL_FIELDS:
-        cm.mark_manual(f)
+    # Optional fields are mapped when the workbook names them explicitly;
+    # otherwise they remain available through the manual-entry workflow.
+    for field_name in OPTIONAL_MANUAL_FIELDS:
+        source_column = next(
+            (candidate for candidate in OPTIONAL_GUESS_MAP[field_name] if candidate in columns),
+            None,
+        )
+        if source_column is not None:
+            cm.set(field_name, source_column)
+            cm.manual_fields.discard(field_name)
+        else:
+            cm.mark_manual(field_name)
     if cm.get(FIELD_ETHIOPIAN_ORIGIN) is None:
         cm.mark_manual(FIELD_ETHIOPIAN_ORIGIN)
     return cm
@@ -230,7 +250,10 @@ def apply_mapping(
         manual_df = manual_df.set_index(FIELD_STUDENT_ID)
         out = out.set_index(FIELD_STUDENT_ID, drop=False)
         for col in manual_df.columns:
-            if col in out.columns:
+            # A persisted manual table contains every optional field for UI
+            # convenience. It may override only fields explicitly configured
+            # as manual; a mapped workbook column remains the source of truth.
+            if col in out.columns and col in mapping.manual_fields:
                 out[col] = manual_df[col].combine_first(out[col]) if col in out else manual_df[col]
                 out.update(manual_df[[col]])
         out = out.reset_index(drop=True)
@@ -247,7 +270,7 @@ def _default_for(field_name: str):
 def _normalize_bool(value) -> bool:
     if isinstance(value, bool):
         return value
-    if value is None:
+    if value is None or pd.isna(value):
         return False
     if isinstance(value, (int, float)):
         return bool(value)
