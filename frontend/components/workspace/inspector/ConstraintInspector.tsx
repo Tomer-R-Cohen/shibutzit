@@ -61,27 +61,48 @@ export default function ConstraintInspector({
   onBack,
   onChanged,
   onRemoved,
+  previewConstraint,
 }: {
   id: string;
   onBack: () => void;
   onChanged?: () => void;
   onRemoved?: () => void;
+  /** Development-only deterministic data for rendered fixture audits. */
+  previewConstraint?: ConstraintModel;
 }) {
-  const [constraint, setConstraint] = useState<ConstraintModel | null | undefined>(undefined);
+  const [constraint, setConstraint] = useState<ConstraintModel | null | undefined>(previewConstraint);
   const [busy, setBusy] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<"soften" | "remove" | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
+    if (previewConstraint) return;
     getConstraints()
-      .then((r) => setConstraint(r.constraints.find((c) => c.id === id) ?? null))
+      .then((r) => {
+        setLoadError(null);
+        setConstraint(r.constraints.find((c) => c.id === id) ?? null);
+      })
       .catch(() => {
         toast.error("לא הצלחתי לטעון את הכלל");
-        setConstraint(null);
+        setLoadError("לא הצלחנו לקרוא את פרטי הכלל. ייתכן שמדובר בבעיית חיבור זמנית.");
       });
-  }, [id]);
+  }, [id, previewConstraint, retryKey]);
 
-  async function handleToggleHard(hard: boolean) {
+  function retryLoad() {
+    setLoadError(null);
+    setConstraint(undefined);
+    setRetryKey((value) => value + 1);
+  }
+
+  async function applyHard(hard: boolean) {
     if (!constraint) return;
     setConstraint({ ...constraint, hard });
+    setConfirmAction(null);
+    if (previewConstraint) {
+      onChanged?.();
+      return;
+    }
     try {
       await patchConstraint(constraint.id, { hard });
       onChanged?.();
@@ -91,9 +112,21 @@ export default function ConstraintInspector({
     }
   }
 
+  function handleToggleHard(hard: boolean) {
+    if (constraint?.hard && !hard) {
+      setConfirmAction("soften");
+      return;
+    }
+    void applyHard(hard);
+  }
+
   async function handleToggleActive(active: boolean) {
     if (!constraint) return;
     setConstraint({ ...constraint, active });
+    if (previewConstraint) {
+      onChanged?.();
+      return;
+    }
     try {
       await patchConstraint(constraint.id, { active });
       onChanged?.();
@@ -106,6 +139,12 @@ export default function ConstraintInspector({
   async function handleRemove() {
     if (!constraint) return;
     setBusy(true);
+    setConfirmAction(null);
+    if (previewConstraint) {
+      onChanged?.();
+      onRemoved?.();
+      return;
+    }
     try {
       await deleteConstraint(constraint.id);
       toast.success("הכלל הוסר");
@@ -126,16 +165,25 @@ export default function ConstraintInspector({
 
       {constraint === undefined && <Skeleton className="h-40 w-full" />}
 
-      {constraint === null && <p className="text-sm text-[var(--cw-ink-3)]">הכלל לא נמצא — כנראה הוסר.</p>}
+      {loadError && (
+        <div className="ws-inline-error" role="alert">
+          <Icon name="warning" size={16} />
+          <div><strong>פרטי הכלל לא נטענו</strong><span>{loadError}</span></div>
+          <button type="button" onClick={retryLoad}>ניסיון נוסף</button>
+        </div>
+      )}
+
+      {!loadError && constraint === null && <p className="text-sm text-[var(--cw-ink-3)]">הכלל לא נמצא — כנראה הוסר.</p>}
 
       {constraint && (
         <>
           <span className="ws-insp-type-chip">{TYPE_LABELS[constraint.type] ?? constraint.type}</span>
           <div className="ws-insp-heading">{constraint.label_hebrew}</div>
-          <div className="text-xs text-[var(--cw-ink-3)]">{SOURCE_LABELS[constraint.source] ?? constraint.source}</div>
+          <div className="ws-rule-source">נוסף: {SOURCE_LABELS[constraint.source] ?? constraint.source}</div>
           <ConstraintShape constraint={constraint} />
 
-          <div className="ws-insp-kv" style={{ marginTop: 14 }}>
+          <div className="ws-rule-controls">
+          <div className="ws-insp-kv">
             <span>סטטוס</span>
             <button
               onClick={() => handleToggleActive(!constraint.active)}
@@ -156,10 +204,41 @@ export default function ConstraintInspector({
               <StatusIndicator status={constraint.hard ? "blocking" : "info"} text={constraint.hard ? "חובה" : "מועדף"} />
             </button>
           </div>
+          </div>
 
-          <Button variant="danger" size="sm" onClick={handleRemove} disabled={busy} className="mt-4 w-full">
-            {busy ? "מסיר…" : "הסרת הכלל"}
-          </Button>
+          {confirmAction === "soften" && (
+            <div className="ws-rule-confirm" role="alert">
+              <Icon name="warning" size={16} />
+              <div>
+                <strong>להפוך את הכלל להעדפה?</strong>
+                <p>בשיבוץ הבא המערכת תנסה לקיים אותו, אבל תוכל לחרוג ממנו כדי למצוא פתרון.</p>
+                <div className="ws-rule-confirm-actions">
+                  <Button size="sm" onClick={() => void applyHard(false)}>אישור השינוי</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmAction(null)}>ביטול</Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {confirmAction === "remove" && (
+            <div className="ws-rule-confirm danger" role="alert">
+              <Icon name="warning" size={16} />
+              <div>
+                <strong>להסיר את הכלל?</strong>
+                <p>הוא לא ישפיע עוד על שיבוצים עתידיים. השיבוץ הנוכחי לא ישתנה עד להרצה נוספת.</p>
+                <div className="ws-rule-confirm-actions">
+                  <Button variant="danger" size="sm" onClick={handleRemove}>כן, להסיר</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmAction(null)}>ביטול</Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {confirmAction !== "remove" && (
+            <Button variant="ghost" size="sm" onClick={() => setConfirmAction("remove")} disabled={busy} className="ws-rule-remove">
+              {busy ? "מסיר…" : "הסרת הכלל"}
+            </Button>
+          )}
         </>
       )}
     </div>

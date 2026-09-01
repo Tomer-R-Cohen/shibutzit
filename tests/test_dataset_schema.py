@@ -16,11 +16,13 @@ import io
 
 import pandas as pd
 import pytest
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import backend.main as backend_main
 from backend.llm.read_tools import execute_read_tool, groupable_fields
 from backend.llm.tools import ProposeCapacityArgs, ToolArgumentError, args_to_constraint
+from backend.routers.optimize import _review_groups
 from backend.session_store import store
 from src.column_mapping import FIELD_STUDENT_ID
 from src.constraints import resolve_group_members
@@ -125,7 +127,12 @@ def session_with_extra_column(client):
     store.reset(session_id)
     headers = {"X-Session-Id": session_id}
     client.post("/api/session", headers=headers)
-    client.post("/api/workbook/load", headers=headers)
+    with patch("backend.routers.workbook.DEFAULT_WORKBOOK_PATH", "רשימה כללית לאיזונית.xlsx"):
+        client.post(
+            "/api/workbook/load",
+            headers=headers,
+            params={"header_row": 4, "first_data_row": 5, "last_data_row": 221},
+        )
     guess = client.get("/api/mapping/guess", headers=headers).json()
     client.post(
         "/api/mapping/apply",
@@ -206,6 +213,11 @@ def test_a_rule_on_an_unknown_column_actually_constrains_the_solve(session_with_
         "propose_capacity", args, sess.token_map.id_for, allowed_fields=groupable_fields(sess)
     )
     assert constraint.args["group"] == {"kind": "field", "field": "x_תאומות"}
+    review = _review_groups(sess, [constraint])
+    assert review[0]["label"] == "תאומות"
+    assert review[0]["hard"] is True
+    assert review[0]["max"] == 2
+    assert len(review[0]["member_ids"]) == total_twins
 
     cfg = SolverConfig(num_classes=6, time_limit_seconds=15)
     result = optimize(df, cfg, sess.constraints + [constraint], friendship_matched={})
@@ -228,6 +240,10 @@ def test_category_column_rule_uses_a_single_value(session_with_extra_column):
         "propose_capacity", args, sess.token_map.id_for, allowed_fields=groupable_fields(sess)
     )
     assert constraint.args["group"] == {"kind": "field_value", "field": "academic_level", "value": "מצטיינת"}
+
+    review = _review_groups(sess, [constraint])
+    assert review[0]["label"] == "הישגים לימודיים: מצטיינת"
+    assert review[0]["hard"] is False
 
     members = resolve_group_members(sess.mapped_df, constraint.args["group"])
     assert len(members) > 0

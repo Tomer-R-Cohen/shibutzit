@@ -7,6 +7,8 @@ import pandas as pd
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile
 
 from src.column_mapping import (
+    FIELD_ACADEMIC_LEVEL,
+    FIELD_CURRENT_SCHOOL,
     FIELD_ETHIOPIAN_ORIGIN,
     FIELD_HAMAR,
     FIELD_INCLUSION,
@@ -21,8 +23,16 @@ from src.column_mapping import (
 )
 from src.constraints import Constraint, capacity_range_label_hebrew
 from src.dataset_schema import attach_extra_columns, detect_extra_columns
-from src.excel_loader import DEFAULT_WORKBOOK_PATH, ExcelLoadError, load_workbook
+from src.excel_loader import (
+    DEFAULT_FIRST_DATA_ROW_1INDEXED,
+    DEFAULT_HEADER_ROW_1INDEXED,
+    DEFAULT_LAST_DATA_ROW_1INDEXED,
+    DEFAULT_WORKBOOK_PATH,
+    ExcelLoadError,
+    load_workbook,
+)
 
+from ..data_edits import DataEditError, apply_confirmed_student_edit, apply_student_data_edits, normalize_student_value
 from ..schemas import LoadWorkbookRequest, MappingSetRequest
 from ..session_store import _safe_name, store
 from ..solver_inputs import ensure_defaults_seeded, sync_class_size_bounds
@@ -63,17 +73,93 @@ def clamp_zero_minimums(constraints: list[Constraint], df) -> list[str]:
     return adjusted
 
 
+def _header_candidate(preview: pd.DataFrame) -> tuple[int, float]:
+    """Return a zero-based header row and confidence score for one sheet."""
+    best_known_row = 0
+    best_known_score = 0
+    for row_index, row in preview.iterrows():
+        columns = [str(value).strip() for value in row.tolist() if pd.notna(value) and str(value).strip()]
+        if not columns:
+            continue
+        mapping = guess_mapping(columns)
+        score = sum(source is not None for source in mapping.mapping.values())
+        if score > best_known_score:
+            best_known_row = int(row_index)
+            best_known_score = score
+
+    if best_known_score >= 2:
+        return best_known_row, 1000.0 + best_known_score * 100 - best_known_row
+
+    # Generic workbooks may use unfamiliar labels. A header is usually a
+    # string-heavy row with at least two cells followed by similarly dense
+    # data rows. Prefer a wider, earlier table over a cover/title block.
+    best_generic_row = 0
+    best_generic_score = float("-inf")
+    for row_index, row in preview.iterrows():
+        values = [value for value in row.tolist() if pd.notna(value) and str(value).strip()]
+        if len(values) < 2:
+            continue
+        text_ratio = sum(isinstance(value, str) for value in values) / len(values)
+        if text_ratio < 0.6:
+            continue
+        minimum_data_cells = max(2, int(len(values) * 0.5))
+        following = preview.iloc[int(row_index) + 1 : int(row_index) + 4]
+        dense_following = sum(
+            1
+            for _, candidate in following.iterrows()
+            if sum(pd.notna(value) and bool(str(value).strip()) for value in candidate.tolist()) >= minimum_data_cells
+        )
+        if dense_following == 0:
+            continue
+        score = len(values) * 10 + dense_following * 4 + text_ratio - int(row_index) * 0.01
+        if score > best_generic_score:
+            best_generic_row = int(row_index)
+            best_generic_score = score
+
+    return best_generic_row, best_generic_score if best_generic_score != float("-inf") else 0.0
+
+
+def _detect_uploaded_table(path: str) -> tuple[str | None, int, int]:
+    """Find a likely sheet and header without imposing the legacy layout.
+
+    Known school-workbook labels are strong evidence. If none are found, a
+    string-heavy table followed by data is selected. This avoids treating an
+    instruction/cover sheet or title row as the student table.
+    """
+    try:
+        with pd.ExcelFile(path, engine="openpyxl") as workbook:
+            sheets = list(workbook.sheet_names)
+    except Exception:
+        return None, 1, 2
+
+    best_sheet = sheets[0] if sheets else None
+    best_row = 0
+    best_score = float("-inf")
+    for sheet in sheets:
+        try:
+            preview = pd.read_excel(path, sheet_name=sheet, header=None, nrows=40, engine="openpyxl")
+        except Exception:
+            continue
+        row, score = _header_candidate(preview)
+        if score > best_score:
+            best_sheet, best_row, best_score = sheet, row, score
+
+    header_row = best_row + 1
+    return best_sheet, header_row, header_row + 1
+
+
 @router.post("/api/workbook/load")
 def load_workbook_endpoint(
-    header_row: int = 4,
-    first_data_row: int = 5,
-    last_data_row: int = 221,
+    header_row: int = DEFAULT_HEADER_ROW_1INDEXED,
+    first_data_row: int = DEFAULT_FIRST_DATA_ROW_1INDEXED,
+    last_data_row: int = DEFAULT_LAST_DATA_ROW_1INDEXED,
     use_default: bool = True,
     file: UploadFile | None = File(default=None),
     x_session_id: str = Header(...),
 ):
     sess = store.get_or_create(x_session_id)
     path = DEFAULT_WORKBOOK_PATH
+    detected_sheet: str | None = None
     if not use_default and file is not None:
         os.makedirs("sample_data", exist_ok=True)
         # Per-session filename: two sessions uploading around the same time
@@ -85,9 +171,12 @@ def load_workbook_endpoint(
         with open(tmp_path, "wb") as f:
             f.write(content)
         path = tmp_path
+        if header_row <= 0 or first_data_row <= 0:
+            detected_sheet, header_row, first_data_row = _detect_uploaded_table(path)
     try:
         wb = load_workbook(
             path,
+            sheet_name=detected_sheet,
             header_row_1indexed=int(header_row),
             first_data_row_1indexed=int(first_data_row),
             last_data_row_1indexed=int(last_data_row) if last_data_row else None,
@@ -96,7 +185,17 @@ def load_workbook_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
     sess.loaded_wb = wb
+    sess.source_path = os.path.abspath(path)
+    sess.source_filename = file.filename if file is not None and not use_default else os.path.basename(path)
+    sess.source_load_options = {
+        "header_row": int(header_row),
+        "first_data_row": int(first_data_row),
+        "last_data_row": int(last_data_row) if last_data_row else None,
+    }
     sess.mapped_df = None
+    sess.student_data_edits = {}
+    sess.assignment_versions = []
+    sess.current_version_id = None
     sess.mark_inputs_changed(data_changed=True, clear_result=True)
     # Keep a persisted mapping only when every referenced source column is
     # present in the newly loaded workbook. Otherwise force a fresh guess.
@@ -151,7 +250,7 @@ def apply_mapping_endpoint(req: MappingSetRequest, x_session_id: str = Header(..
 
     cm = ColumnMapping()
     for field_name, col in req.mapping.items():
-        if field_name in req.manual_fields or col is None:
+        if field_name in req.manual_fields and field_name in OPTIONAL_MANUAL_FIELDS:
             cm.mark_manual(field_name)
         else:
             cm.set(field_name, col)
@@ -191,6 +290,7 @@ def apply_mapping_endpoint(req: MappingSetRequest, x_session_id: str = Header(..
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
+    mapped = apply_student_data_edits(mapped, sess.student_data_edits)
     sess.mapped_df = mapped
     manual_needed = [f for f in OPTIONAL_MANUAL_FIELDS if f in cm.manual_fields]
     ensure_defaults_seeded(sess, mapped)
@@ -213,7 +313,39 @@ def get_students(x_session_id: str = Header(...)):
     category fields), for the data-screen list/editor."""
     sess = store.get_or_create(x_session_id)
     df = require(sess.mapped_df, "יש להשלים תחילה טעינה ומיפוי.")
-    return {"rows": df_records(df), "count": len(df)}
+    rows = df_records(df)
+    for row in rows:
+        student_id = int(row[FIELD_STUDENT_ID])
+        row["_project_edited_fields"] = sorted(sess.student_data_edits.get(student_id, {}).keys())
+    return {"rows": rows, "count": len(df)}
+
+
+@router.patch("/api/students/{student_id}")
+def update_student_data(student_id: int, payload: dict, x_session_id: str = Header(...)):
+    """Correct a visible roster value in the project's working copy.
+
+    The uploaded workbook remains immutable; the same audited overlay used
+    by conversational edits becomes authoritative for validation and solves.
+    Only the two ordinary fields exposed by the roster correction UI are
+    accepted here. Sensitive support-category edits keep their existing path.
+    """
+    field = str(payload.get("field") or "")
+    if field not in {FIELD_CURRENT_SCHOOL, FIELD_ACADEMIC_LEVEL}:
+        raise HTTPException(status_code=400, detail="ניתן לתקן במסך זה רק בית ספר נוכחי או הישגים לימודיים.")
+    sess = store.get_or_create(x_session_id)
+    try:
+        old_value, new_value = apply_confirmed_student_edit(sess, student_id, field, payload.get("value"))
+    except DataEditError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store.save(sess)
+    return {
+        "student_id": student_id,
+        "field": field,
+        "old_value": old_value,
+        "new_value": new_value,
+        "remaining_issues": len(sess.validation_report.issues),
+        "result_state": sess.result_state(),
+    }
 
 
 @router.get("/api/mapping/manual-entry")
@@ -244,6 +376,28 @@ def update_manual_entry(payload: dict, x_session_id: str = Header(...)):
 
     rows = payload.get("rows", [])
     new_df = pd.DataFrame(rows) if rows else sess.manual_entry_df
+    # Visual roster edits and conversational edits share the same project
+    # overlay. If a source-mapped optional field is changed in the UI, keep
+    # that correction instead of letting the immutable source overwrite it.
+    if rows and sess.mapped_df is not None:
+        for incoming in rows:
+            try:
+                student_id = int(incoming[FIELD_STUDENT_ID])
+            except (KeyError, TypeError, ValueError):
+                continue
+            current = sess.mapped_df.loc[sess.mapped_df[FIELD_STUDENT_ID] == student_id]
+            if current.empty:
+                continue
+            for field in OPTIONAL_MANUAL_FIELDS:
+                if field not in incoming or field not in sess.mapped_df.columns:
+                    continue
+                try:
+                    normalized = normalize_student_value(sess.mapped_df, field, incoming[field])
+                except DataEditError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                old_value = current.iloc[0][field]
+                if pd.isna(old_value) or old_value != normalized:
+                    sess.student_data_edits.setdefault(student_id, {})[field] = normalized
     sess.manual_entry_df = new_df
 
     try:
@@ -255,6 +409,7 @@ def update_manual_entry(payload: dict, x_session_id: str = Header(...)):
             mapped = attach_extra_columns(mapped, wb.raw_df, sess.dataset_schema)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+    mapped = apply_student_data_edits(mapped, sess.student_data_edits)
     sess.mapped_df = mapped
     ensure_defaults_seeded(sess, mapped)
     clamp_zero_minimums(sess.constraints, mapped)
@@ -285,6 +440,7 @@ def import_manual_entry(file: UploadFile = File(...), x_session_id: str = Header
             mapped = attach_extra_columns(mapped, sess.loaded_wb.raw_df, sess.dataset_schema)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"×©×’×™××” ×‘×”×—×œ×ª ×”×™×™×‘×•×: {e}")
+    mapped = apply_student_data_edits(mapped, sess.student_data_edits)
     sess.mapped_df = mapped
     ensure_defaults_seeded(sess, mapped)
     clamp_zero_minimums(sess.constraints, mapped)

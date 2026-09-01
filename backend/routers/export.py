@@ -30,6 +30,12 @@ def export_xlsx(x_session_id: str = Header(...)):
     sess = store.get_or_create(x_session_id)
     if sess.adjustment_state is None:
         raise HTTPException(status_code=409, detail="אין שיבוץ להצגה - יש להריץ אופטימיזציה תחילה.")
+    current_version = next((v for v in sess.assignment_versions if v.id == sess.current_version_id), None)
+    if current_version is None or not current_version.approved:
+        raise HTTPException(
+            status_code=409,
+            detail="יש לאשר את גרסת השיבוץ הנוכחית לפני הורדת קובץ סופי.",
+        )
     df = sess.mapped_df
     cfg, constraints = build_solver_inputs(sess)
     state = sess.adjustment_state
@@ -37,6 +43,7 @@ def export_xlsx(x_session_id: str = Header(...)):
     unmatched_df = sess.unmatched_df
     opt_result = sess.opt_result
     wb = sess.loaded_wb
+    manually_adjusted = sess.result_mode == "manual"
 
     import pandas as pd
 
@@ -47,9 +54,9 @@ def export_xlsx(x_session_id: str = Header(...)):
         cfg,
         constraints,
         unmatched_df if unmatched_df is not None else pd.DataFrame(),
-        solver_status=opt_result.status_name if opt_result else "",
-        solver_wall_time=opt_result.wall_time_seconds if opt_result else 0.0,
-        objective_value=opt_result.objective_value if opt_result else None,
+        solver_status="MANUAL" if manually_adjusted else (opt_result.status_name if opt_result else ""),
+        solver_wall_time=0.0 if manually_adjusted else (opt_result.wall_time_seconds if opt_result else 0.0),
+        objective_value=None if manually_adjusted else (opt_result.objective_value if opt_result else None),
         locked=state.locked_assignment(),
         raw_source_df=wb.raw_df if wb else None,
     )

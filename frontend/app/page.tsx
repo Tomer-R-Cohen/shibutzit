@@ -8,13 +8,14 @@ import ContextInspector from "@/components/workspace/ContextInspector";
 import DatasetOnboarding, { DatasetReadyInfo } from "@/components/workspace/DatasetOnboarding";
 import Welcome from "@/components/workspace/Welcome";
 import FixturePreview from "@/components/workspace/FixturePreview";
+import FirstRunFixturePreview, { FIRST_RUN_FIXTURES } from "@/components/workspace/FirstRunFixturePreview";
 import RosterWorkbench from "@/components/workspace/RosterWorkbench";
 import ResultsBoard from "@/components/workspace/ResultsBoard";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import { getStudents, resetSession } from "@/lib/api";
 import type { SuggestedAction } from "@/lib/api";
 import { FIXTURES } from "@/lib/fixtures";
-import { AttentionTarget, useWorkspace } from "@/lib/workspace";
+import { AttentionTarget, DataProblem, RosterFocus, useWorkspace } from "@/lib/workspace";
 import { probeDataReady } from "@/lib/bootstrap";
 import { resetFlags } from "@/lib/steps";
 
@@ -42,8 +43,10 @@ export default function Home() {
   const workspace = useWorkspace();
   const {
     timeline,
+    historyReady,
     sending,
     solving,
+    solverVisualActive,
     setInspector,
     highlight,
     setHighlight,
@@ -55,9 +58,14 @@ export default function Home() {
     suggestions,
     decideProposal,
     sendMessage,
+    retryMessage,
+    retrySolve,
     runSolve,
     appendDatasetReady,
     appendDataWarning,
+    appendManualMove,
+    appendFinalApproval,
+    bumpDataVersion,
   } = workspace;
   const [datasetReady, setDatasetReady] = useState(false);
   // welcome -> (plan | upload) -> workspace. The app used to auto-load the
@@ -71,13 +79,14 @@ export default function Home() {
   // being a second column and becomes a dismissible sheet.
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
+  const [rosterFocus, setRosterFocus] = useState<RosterFocus | undefined>(undefined);
 
   const handleReady = useCallback(
     (info: DatasetReadyInfo) => {
       setStudentCount(info.studentCount);
       setDatasetReady(true);
       setPhase("workspace");
-      appendDatasetReady(info.studentCount, info.schoolCount, info.levelCount, info.warningCount, info.levelCounts);
+      appendDatasetReady(info.studentCount, info.schoolCount, info.levelCount, info.warningCount, info.levelCounts, info.detectedFields, info.missingFields, info.friendshipCount);
       // Default constraints are seeded server-side once a dataset exists, so
       // the summary fetched at mount (before any dataset was loaded) is
       // stale -- refresh it now that there's something to count.
@@ -86,7 +95,7 @@ export default function Home() {
     [appendDatasetReady, refreshConstraintsSummary]
   );
 
-  const handleWarning = useCallback((problems: string[]) => appendDataWarning(problems), [appendDataWarning]);
+  const handleWarning = useCallback((problems: DataProblem[]) => appendDataWarning(problems), [appendDataWarning]);
 
   useEffect(() => {
     (async () => {
@@ -141,15 +150,22 @@ export default function Home() {
     }
   }
 
+  function revealInspectorOnSmallScreen() {
+    if (window.matchMedia("(max-width: 900px)").matches) setInspectorOpen(true);
+  }
+
   function openConstraints() {
     setInspector({ type: "constraints" });
+    revealInspectorOnSmallScreen();
   }
 
   function openConstraint(id: string) {
     setInspector({ type: "constraint", id });
+    revealInspectorOnSmallScreen();
   }
 
-  function openRoster() {
+  function openRoster(focus?: RosterFocus) {
+    setRosterFocus(focus);
     setWorkbench("roster");
   }
 
@@ -163,11 +179,13 @@ export default function Home() {
     if (target.kind === "constraint") {
       setInspector({ type: "constraint", id: target.id });
       setHighlight({ kind: "constraint", id: target.id });
+      revealInspectorOnSmallScreen();
     } else if (target.kind === "class") {
       setHighlight({ kind: "class", id: target.id });
       openResults();
     } else {
       setInspector({ type: "constraints" });
+      revealInspectorOnSmallScreen();
     }
   }
 
@@ -175,7 +193,12 @@ export default function Home() {
   // events are narrative only and cannot make an old result look current.
   const lastResultIdx = timeline.map((i) => i.kind).lastIndexOf("solve_result");
   const hasResult = lastResultIdx >= 0;
-  const runState: RunState = solving
+  // `solving` spans the full orchestration, including the assistant's
+  // paced post-result commentary. The top bar must describe the actual
+  // assignment state: as soon as the structured result lands and the
+  // solver visual stops, the assignment is ready even if the assistant is
+  // still finishing its explanation below it.
+  const runState: RunState = solverVisualActive
     ? "solving"
     : !resultState?.has_result
       ? "none"
@@ -202,6 +225,15 @@ export default function Home() {
         : [];
   const composerSuggestions = suggestions.length > 0 ? suggestions : fallbackSuggestions;
 
+  if (fixtureName && FIRST_RUN_FIXTURES.has(fixtureName)) {
+    return <FirstRunFixturePreview name={fixtureName} />;
+  }
+
+  function openHistory() {
+    setInspector({ type: "overview" });
+    revealInspectorOnSmallScreen();
+  }
+
   if (fixtureName && FIXTURES[fixtureName]) {
     return <FixturePreview fixture={FIXTURES[fixtureName]} />;
   }
@@ -209,7 +241,7 @@ export default function Home() {
   if (phase === "booting") {
     return (
       <div className="ws-shell">
-        <TopBar runState="none" onRunSolve={() => {}} canSolve={false} />
+        <TopBar runState="none" onRunSolve={() => {}} canSolve={false} showRunStatus={false} />
         <div className="ws-onboarding">
           <div className="ws-onboarding-box">
             <span className="ws-spinner" aria-hidden />
@@ -223,7 +255,7 @@ export default function Home() {
   if (phase === "welcome") {
     return (
       <div className="ws-shell">
-        <TopBar runState="none" onRunSolve={() => {}} canSolve={false} />
+        <TopBar runState="none" onRunSolve={() => {}} canSolve={false} showRunStatus={false} />
         <Welcome onPlan={() => setPhase("workspace")} onUpload={() => setPhase("upload")} />
       </div>
     );
@@ -232,7 +264,7 @@ export default function Home() {
   if (phase === "upload") {
     return (
       <div className="ws-shell">
-        <TopBar runState="none" onRunSolve={() => {}} canSolve={false} onStartOver={() => setConfirmingReset(true)} />
+        <TopBar runState="none" onRunSolve={() => {}} canSolve={false} onStartOver={() => setConfirmingReset(true)} showRunStatus={false} />
         <DatasetOnboarding onReady={handleReady} onWarning={handleWarning} onBack={() => setPhase("welcome")} />
       </div>
     );
@@ -241,17 +273,18 @@ export default function Home() {
   return (
     <>
       <WorkspaceShell
+        inspectorVisible={datasetReady}
         inspectorOpen={inspectorOpen}
         onCloseInspector={() => setInspectorOpen(false)}
         topBar={
           <TopBar
             runState={runState}
-            onRunSolve={runSolve}
+            onRunSolve={() => void runSolve()}
             canSolve={datasetReady && !solving}
             onUploadData={!datasetReady ? () => setPhase("upload") : undefined}
             onStartOver={() => setConfirmingReset(true)}
             inspectorOpen={inspectorOpen}
-            onToggleInspector={() => setInspectorOpen((v) => !v)}
+            onToggleInspector={datasetReady ? () => setInspectorOpen((v) => !v) : undefined}
           />
         }
         conversation={
@@ -259,8 +292,10 @@ export default function Home() {
             items={timeline}
             sending={sending}
             solving={solving}
+            solverVisualActive={solverVisualActive}
             deciding={deciding}
             studentCount={studentCount}
+            historyReady={historyReady}
             hasDataset={datasetReady}
             onSend={sendMessage}
             onConfirmProposal={handleConfirmProposal}
@@ -269,6 +304,9 @@ export default function Home() {
             onOpenResults={openResults}
             onOpenConstraints={openConstraints}
             onOpenConstraint={openConstraint}
+            onOpenHistory={openHistory}
+            onRetryMessage={retryMessage}
+            onRetrySolve={retrySolve}
             composerPlaceholder={composerPlaceholder}
             composerSuggestions={composerSuggestions}
             highlight={highlight}
@@ -281,9 +319,11 @@ export default function Home() {
             workspace={workspace}
             studentCount={studentCount}
             onOpenRoster={openRoster}
+            onOpenResults={openResults}
             highlight={highlight}
             onHighlight={setHighlight}
             sheetOpen={inspectorOpen}
+            onCloseSheet={() => setInspectorOpen(false)}
           />
         }
       />
@@ -296,8 +336,28 @@ export default function Home() {
         danger
         onConfirm={() => void handleStartOver()}
       />
-      <RosterWorkbench open={workbench === "roster"} onClose={() => setWorkbench(null)} />
-      <ResultsBoard open={workbench === "results"} onClose={() => setWorkbench(null)} onResultChanged={refreshResultState} />
+      <RosterWorkbench
+        open={workbench === "roster"}
+        focus={rosterFocus}
+        onClose={() => {
+          setWorkbench(null);
+          setRosterFocus(undefined);
+        }}
+      />
+      <ResultsBoard
+        open={workbench === "results"}
+        onClose={() => setWorkbench(null)}
+        onResultChanged={() => {
+          void refreshResultState();
+          bumpDataVersion();
+        }}
+        onAskAI={sending || solving ? undefined : (message) => {
+          setWorkbench(null);
+          void sendMessage(message);
+        }}
+        onManualMove={appendManualMove}
+        onApproved={appendFinalApproval}
+      />
     </>
   );
 }

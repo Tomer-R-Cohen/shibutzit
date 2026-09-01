@@ -51,11 +51,40 @@ class SetClassCountArgs(BaseModel):
     num_classes: int = Field(description="How many classes to split the year into")
 
 
+class RequestSolverRunArgs(BaseModel):
+    alternatives: int = Field(
+        default=1,
+        ge=1,
+        le=3,
+        description="Number of real assignment alternatives explicitly requested. Use 3 for 'several options'.",
+    )
+    explain_results: bool = Field(
+        default=True,
+        description="Whether the user asked for an explanation or details about the resulting assignments.",
+    )
+
+
+class RememberProjectNoteArgs(BaseModel):
+    note: str = Field(
+        description=(
+            "A concise durable project instruction in Hebrew, such as 'Never relax the inclusion rule' or "
+            "'Friendship is more important than source-school balance'."
+        )
+    )
+
+
+class RemoveProjectNoteArgs(BaseModel):
+    note: str = Field(description="The durable project instruction to remove, matching its meaning or wording.")
+
+
 PLANNING_TOOL_MODELS: dict[str, type[BaseModel]] = {
     "get_data_requirements": NoArgs,
     "note_required_data": NoteRequiredDataArgs,
     "drop_required_data": DropRequiredDataArgs,
     "set_class_count": SetClassCountArgs,
+    "request_solver_run": RequestSolverRunArgs,
+    "remember_project_note": RememberProjectNoteArgs,
+    "remove_project_note": RemoveProjectNoteArgs,
 }
 
 PLANNING_TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -66,6 +95,15 @@ PLANNING_TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "drop_required_data": "הסר עמודה מרשימת הדרישות, אם היועצת החליטה שאינה נחוצה.",
     "set_class_count": "קבע לכמה כיתות לחלק את השכבה. אפשר לקרוא לזה גם לפני שנטען קובץ.",
+    "request_solver_run": (
+        "בקש מהממשק להריץ את השיבוץ האמיתי עם הנתונים והכללים המאושרים כעת. "
+        "השתמש/י רק כשהמשתמשת ביקשה במפורש להריץ, לנסות שוב או להפיק שיבוץ; לעולם לא ביוזמתך."
+    ),
+    "remember_project_note": (
+        "שמור הנחיית פרויקט מתמשכת שהמשתמשת מבקשת לזכור להמשך, למשל כלל שאסור לרכך או סדר עדיפויות. "
+        "אין להשתמש בזה במקום כלל מספרי שניתן לייצג ככלל שיבוץ מובנה."
+    ),
+    "remove_project_note": "הסר הנחיית פרויקט מתמשכת כשהמשתמשת חוזרת בה במפורש.",
 }
 
 
@@ -143,16 +181,57 @@ def _set_class_count(sess, args: SetClassCountArgs) -> dict:
     return {"num_classes": args.num_classes, "previous": previous, "size_rule_rescaled": sess.mapped_df is not None}
 
 
+def _request_solver_run(sess, _args: RequestSolverRunArgs) -> dict:
+    if sess.mapped_df is None:
+        return {"error": "no_dataset", "detail": "A workbook must be uploaded before the solver can run."}
+    return {
+        "solver_run_requested": True,
+        "num_classes": sess.run_config.num_classes,
+        "active_rules": sum(1 for c in sess.constraints if c.active),
+        "alternatives": _args.alternatives,
+        "explain_results": _args.explain_results,
+        "note": "The frontend will run the existing solver with the current confirmed session inputs.",
+    }
+
+
+def _remember_project_note(sess, args: RememberProjectNoteArgs) -> dict:
+    note = " ".join(args.note.split()).strip()
+    if not note:
+        return {"error": "bad_arguments", "detail": "note is required"}
+    if not any(existing.casefold() == note.casefold() for existing in sess.user_notes):
+        sess.user_notes.append(note)
+        sess.user_notes = sess.user_notes[-30:]
+    return {"remembered": True, "note": note}
+
+
+def _remove_project_note(sess, args: RemoveProjectNoteArgs) -> dict:
+    needle = " ".join(args.note.split()).strip().casefold()
+    matches = [n for n in sess.user_notes if needle in n.casefold() or n.casefold() in needle]
+    if not matches:
+        return {"error": "not_found", "detail": "No matching project note was found."}
+    sess.user_notes = [n for n in sess.user_notes if n not in matches]
+    return {"removed": True, "notes": matches}
+
+
 _PLANNING_DISPATCH = {
     "get_data_requirements": _get_data_requirements,
     "note_required_data": _note_required_data,
     "drop_required_data": _drop_required_data,
     "set_class_count": _set_class_count,
+    "request_solver_run": _request_solver_run,
+    "remember_project_note": _remember_project_note,
+    "remove_project_note": _remove_project_note,
 }
 
 # Tools that change persisted session state and therefore need a store.save()
 # after the turn, plus a refresh signal to the UI.
-MUTATING_PLANNING_TOOLS = {"note_required_data", "drop_required_data", "set_class_count"}
+MUTATING_PLANNING_TOOLS = {
+    "note_required_data",
+    "drop_required_data",
+    "set_class_count",
+    "remember_project_note",
+    "remove_project_note",
+}
 
 
 def is_planning_tool(name: str) -> bool:

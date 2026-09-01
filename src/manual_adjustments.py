@@ -22,8 +22,10 @@ class AdjustmentState:
 
     def move_student(self, student_id: int, new_class: int, num_classes: int) -> None:
         """Move a student to a new class (0-based index)."""
+        if student_id not in self.assignment:
+            raise ManualAdjustmentError("התלמידה אינה קיימת בשיבוץ הנוכחי.")
         if new_class < 0 or new_class >= num_classes:
-            raise ManualAdjustmentError(f"כיתה {new_class} אינה קיימת (0..{num_classes - 1}).")
+            raise ManualAdjustmentError(f"כיתה {new_class + 1} אינה קיימת (יש לבחור 1..{num_classes}).")
         self.assignment[student_id] = new_class
 
     def lock(self, student_id: int) -> None:

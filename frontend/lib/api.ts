@@ -148,10 +148,24 @@ export interface StudentRecord {
   inclusion?: boolean;
   hamar?: boolean;
   friend_requests_raw?: string;
+  _project_edited_fields?: string[];
   [key: string]: unknown;
 }
 export function getStudents() {
   return request<{ rows: StudentRecord[]; count: number }>("/api/students");
+}
+export function updateStudentData(studentId: number, field: "current_school" | "academic_level", value: string) {
+  return request<{
+    student_id: number;
+    field: string;
+    old_value: unknown;
+    new_value: unknown;
+    remaining_issues: number;
+    result_state: ResultState;
+  }>(`/api/students/${studentId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ field, value }),
+  });
 }
 export function updateManualEntry(rows: Record<string, unknown>[]) {
   return request<{ student_count: number; manual_entry: Record<string, unknown>[] }>("/api/mapping/manual-entry", {
@@ -266,11 +280,20 @@ export interface ChatMessage {
   content: string;
 }
 export interface PendingProposal {
-  kind: "propose" | "modify" | "remove";
+  kind: "propose" | "modify" | "remove" | "assignment_action" | "data_action";
   summary_hebrew: string;
   constraint?: ConstraintModel | null;
   target_constraint_id?: string | null;
   changes?: Record<string, unknown> | null;
+  action?: "move_student" | "set_student_lock" | "restore_version" | "edit_student_data" | null;
+  action_args?: Record<string, unknown> | null;
+  evidence?: {
+    basis?: "measured_trial" | "solver_conflict" | "arithmetic_feasibility_package";
+    trial_feasible?: boolean | null;
+    changes_hard_rule?: boolean;
+    other_hard_rules_changed?: number;
+    item_count?: number;
+  } | null;
 }
 /** One read tool the agent ran while working on a turn. Reads execute
  *  immediately server-side; only writes come back as a proposal. */
@@ -285,19 +308,87 @@ export interface SuggestedAction {
 export function getChatHistory() {
   return request<{ messages: ChatMessage[]; pending_proposal: PendingProposal | null }>("/api/chat/history");
 }
+export interface ChatResponse {
+  reply: string;
+  pending_proposal: PendingProposal | null;
+  steps?: AgentStep[];
+  state_changed?: boolean;
+  suggestions?: SuggestedAction[];
+  result_state?: ResultState;
+  solver_run_requested?: boolean;
+  solver_run_count?: number;
+}
 export function sendChatMessage(message: string) {
-  return request<{
-    reply: string;
-    pending_proposal: PendingProposal | null;
-    steps?: AgentStep[];
-    /** A planning tool changed persisted state, so the panels are stale. */
-    state_changed?: boolean;
-    suggestions?: SuggestedAction[];
-    result_state?: ResultState;
-  }>("/api/chat/message", {
+  return request<ChatResponse>("/api/chat/message", {
     method: "POST",
     body: JSON.stringify({ message }),
   });
+}
+type StreamHandlers = { onDelta?: (text: string) => void; onTool?: (step: AgentStep) => void };
+
+async function streamRequest<T>(path: string, body: unknown, handlers: StreamHandlers): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "X-Session-Id": getSessionId(), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok || !res.body) throw new ApiError(res.status, res.statusText || "Streaming response unavailable");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: T | null = null;
+  let cancelled = false;
+  // Providers often deliver a whole sentence in one network chunk, which
+  // makes a technically-streaming answer flash onto the screen instantly.
+  // Serialize those chunks into a calmer reading pace without delaying the
+  // model, tools, or solver themselves.
+  const STREAM_CHARS_PER_TICK = 2;
+  const STREAM_TICK_MS = 38;
+  let pacing = Promise.resolve();
+  const paceText = (text: string) => {
+    pacing = pacing.then(async () => {
+      for (let index = 0; index < text.length && !cancelled; index += STREAM_CHARS_PER_TICK) {
+        handlers.onDelta?.(text.slice(index, index + STREAM_CHARS_PER_TICK));
+        if (index + STREAM_CHARS_PER_TICK < text.length) {
+          await new Promise((resolve) => window.setTimeout(resolve, STREAM_TICK_MS));
+        }
+      }
+    });
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as {
+        type: "status" | "delta" | "tool" | "result" | "error";
+        text?: string;
+        tool?: string;
+        ok?: boolean;
+        status?: number | string;
+        detail?: string;
+        data?: T;
+      };
+      if (event.type === "delta" && event.text) paceText(event.text);
+      if (event.type === "tool" && event.tool) handlers.onTool?.({ tool: event.tool, ok: event.ok !== false });
+      if (event.type === "result" && event.data) result = event.data;
+      if (event.type === "error") {
+        cancelled = true;
+        throw new ApiError(typeof event.status === "number" ? event.status : 500, event.detail ?? "Streaming failed");
+      }
+    }
+    if (done) break;
+  }
+  await pacing;
+  if (!result) throw new ApiError(502, "The assistant stream ended before a final response was received.");
+  return result;
+}
+
+export function streamChatMessage(message: string, handlers: StreamHandlers = {}): Promise<ChatResponse> {
+  return streamRequest<ChatResponse>("/api/chat/message/stream", { message }, handlers);
 }
 /** One column the counselor agreed to add to the workbook, from planning. */
 export interface DataRequirement {
@@ -326,7 +417,15 @@ export function deleteDataRequirement(id: string) {
 }
 
 export function confirmChatProposal() {
-  return request<{ applied: boolean; result: unknown }>("/api/chat/confirm", { method: "POST" });
+  return request<{
+    applied: boolean;
+    result: unknown;
+    result_state?: ResultState;
+    solver_run_requested?: boolean;
+    state_changed?: boolean;
+    confirmation_message?: string;
+    action_kind?: PendingProposal["action"];
+  }>("/api/chat/confirm", { method: "POST" });
 }
 export function rejectChatProposal() {
   return request<{ rejected: boolean }>("/api/chat/reject", { method: "POST" });
@@ -356,9 +455,35 @@ export interface OptimizeResponse {
   // Short LLM read of a successful result; null when no LLM is configured.
   result_comment?: string | null;
   result_state?: ResultState;
+  version?: { id: string; number: number } | null;
 }
-export function runOptimize() {
-  return request<OptimizeResponse>("/api/optimize", { method: "POST" });
+export interface ProjectDecision {
+  at: string;
+  decision: "approved" | "rejected" | "applied";
+  kind: string;
+  summary: string;
+}
+export function getProjectMemory() {
+  return request<{ notes: string[]; decisions: ProjectDecision[] }>("/api/project-memory");
+}
+export function runOptimize(alternative = false, includeComment = true) {
+  return request<OptimizeResponse>("/api/optimize", {
+    method: "POST",
+    params: { alternative, include_comment: includeComment },
+  });
+}
+export function continueAfterSolver(versionIds: string[]) {
+  return request<{ reply: string; steps?: AgentStep[]; suggestions?: SuggestedAction[] }>("/api/chat/solver-result", {
+    method: "POST",
+    body: JSON.stringify({ version_ids: versionIds }),
+  });
+}
+export function streamAfterSolver(versionIds: string[], handlers: StreamHandlers = {}) {
+  return streamRequest<{ reply: string; steps?: AgentStep[]; suggestions?: SuggestedAction[] }>(
+    "/api/chat/solver-result/stream",
+    { version_ids: versionIds },
+    handlers
+  );
 }
 
 // ---- Step 9: results ----
@@ -383,8 +508,16 @@ export interface ClassOverviewRow {
 export function getResultsOverview() {
   return request<{ rows: ClassOverviewRow[] }>("/api/results/overview");
 }
+export interface ReviewGroup {
+  id: string;
+  label: string;
+  hard: boolean;
+  min: number | null;
+  max: number | null;
+  member_ids: number[];
+}
 export function getResultsStudents() {
-  return request<{ rows: Record<string, unknown>[] }>("/api/results/students");
+  return request<{ rows: Record<string, unknown>[]; review_groups: ReviewGroup[] }>("/api/results/students");
 }
 export interface GlobalMetrics {
   total_students: number;
@@ -393,6 +526,7 @@ export interface GlobalMetrics {
   class_size_min: number;
   class_size_max: number;
   class_size_spread: number;
+  academic_level_spread: number | null;
   mutual_satisfied_pct: number;
   two_friends_satisfied_pct: number;
   satisfied_requests: number;
@@ -418,9 +552,36 @@ export function getResultsFriendship() {
   );
 }
 
+export interface AssignmentVersionSummary {
+  id: string;
+  number: number;
+  created_at: string;
+  reason: string;
+  mode: "solver" | "manual";
+  approved: boolean;
+  is_current: boolean;
+  metrics: GlobalMetrics;
+  locked_count: number;
+  moved_students_from_previous: number | null;
+}
+export function getVersions() {
+  return request<{ current_version_id: string | null; versions: AssignmentVersionSummary[] }>("/api/versions");
+}
+export function restoreVersion(versionId: string) {
+  return request<{ restored: boolean; version_id: string; number: number; result_state: ResultState }>(
+    `/api/versions/${versionId}/restore`,
+    { method: "POST" }
+  );
+}
+export function approveVersion(versionId: string) {
+  return request<{ approved: boolean; version_id: string; number: number }>(`/api/versions/${versionId}/approve`, {
+    method: "POST",
+  });
+}
+
 // ---- Step 10: manual adjustment ----
 export function moveStudent(studentId: number, newClass: number, locked?: boolean) {
-  return request<{ assignment_updated: boolean; metrics: GlobalMetrics }>("/api/adjustment/move", {
+  return request<{ assignment_updated: boolean; metrics: GlobalMetrics; result_state: ResultState; version?: { id: string; number: number } }>("/api/adjustment/move", {
     method: "POST",
     body: JSON.stringify({ student_id: studentId, new_class: newClass, locked }),
   });

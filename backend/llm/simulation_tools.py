@@ -33,11 +33,13 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from src.column_mapping import FIELD_STUDENT_ID
 from src.constraints import Constraint, capacity_range_label_hebrew, class_size_label_hebrew, resolve_group_members
-from src.metrics import compute_global_metrics
+from src.metrics import compute_global_metrics, violations_report
 from src.optimizer import OptimizationError, optimize
 
 from ..solver_inputs import build_locked_constraints, build_solver_inputs
+from ..utils import df_records
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +73,34 @@ class SimulateRuleToggleArgs(BaseModel):
     active: Optional[bool] = Field(default=None, description="Try switching the rule off (false) or on (true)")
 
 
+class SimulateFriendshipPriorityArgs(BaseModel):
+    constraint_id: str = Field(description="id of the friendship objective from get_active_rules")
+    weight_mutual: Optional[int] = Field(default=None, ge=0, description="Trial weight for at least one mutual friend")
+    weight_two_friends: Optional[int] = Field(default=None, ge=0, description="Trial weight for at least two requested friends")
+
+
+class SimulateBalancePriorityArgs(BaseModel):
+    constraint_id: str = Field(description="id of an active balance preference from get_active_rules")
+    weight: float = Field(gt=0, description="Trial importance for this balance preference")
+
+
+class FindClassSizeBalanceMovesArgs(BaseModel):
+    pass
+
+
+class SimulateStudentMoveArgs(BaseModel):
+    student: str = Field(description="Anonymized student token")
+    class_number: int = Field(ge=1, description="Destination class number shown to the counselor, 1-based")
+
+
 SIM_TOOL_MODELS: dict[str, type[BaseModel]] = {
     "simulate_capacity_change": SimulateCapacityChangeArgs,
     "simulate_class_count": SimulateClassCountArgs,
     "simulate_rule_toggle": SimulateRuleToggleArgs,
+    "simulate_friendship_priority": SimulateFriendshipPriorityArgs,
+    "simulate_balance_priority": SimulateBalancePriorityArgs,
+    "find_class_size_balance_moves": FindClassSizeBalanceMovesArgs,
+    "simulate_student_move": SimulateStudentMoveArgs,
 }
 
 SIM_TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -85,6 +111,25 @@ SIM_TOOL_DESCRIPTIONS: dict[str, str] = {
     "simulate_class_count": "בדיקה בפועל: הרץ שיבוץ ניסיוני עם מספר כיתות אחר וקבל השוואה למצב הנוכחי. לא מחיל כלום.",
     "simulate_rule_toggle": (
         "בדיקה בפועל: הרץ שיבוץ ניסיוני כשחוק קיים הופך לחובה/העדפה או מכובה, וקבל השוואה למצב הנוכחי. לא מחיל כלום."
+    ),
+    "simulate_friendship_priority": (
+        "בדיקה בפועל: הרץ שיבוץ ניסיוני עם עדיפות אחרת לבקשה הדדית או ללפחות שתי חברות, "
+        "והשווה למצב הנוכחי. לא מחיל שום שינוי."
+    ),
+    "simulate_balance_priority": (
+        "Run a real trial assignment with a different weight for one active balance preference, such as academic "
+        "level or source-school balance. Returns the measured targeted spread and the trade-offs against the current "
+        "assignment. Nothing is applied."
+    ),
+    "find_class_size_balance_moves": (
+        "Exhaustively evaluate direct one-student moves from the largest class to the smallest class. Returns the "
+        "best measured candidates that preserve every mandatory rule, with exact friendship and academic before/after "
+        "effects. Nothing is applied. Use this when the counselor wants a specific correction, not only a rule change."
+    ),
+    "simulate_student_move": (
+        "Test moving one student to a requested class without changing the assignment. Reports exact new mandatory-rule "
+        "violations and measured friendship/academic effects. If the direct move is blocked, also searches for safe "
+        "one-for-one swaps with that class. Use for questions such as 'what happens if I move Maya to class 4?'."
     ),
 }
 
@@ -103,15 +148,54 @@ def build_simulation_tool_definitions() -> list[dict]:
 
 # ------------------------------------------------------------------ helpers
 
-def _snapshot(df, assignment, constraints, cfg) -> dict:
+def _snapshot(df, assignment, matched, constraints, cfg) -> dict:
     """The handful of figures worth comparing across a what-if."""
-    gm = compute_global_metrics(df, assignment, {}, constraints, cfg.num_classes, cfg.denominator_all_students)
+    gm = compute_global_metrics(df, assignment, matched, constraints, cfg.num_classes, cfg.denominator_all_students)
     return {
         "class_sizes": list(gm.class_sizes),
         "size_spread": gm.class_size_spread,
+        "academic_spread": gm.academic_level_spread,
         "violations": gm.violations_count,
+        "friendship_available": gm.students_with_requests > 0,
+        "students_with_requests": gm.students_with_requests,
         "mutual_pct": gm.mutual_satisfied_pct,
         "two_friends_pct": gm.two_friends_satisfied_pct,
+    }
+
+
+def _balance_diagnostic(df, assignment, num_classes: int, constraint: Constraint) -> dict:
+    """Measure the exact dimensions represented by one balance objective."""
+    group = constraint.args.get("group", {})
+    dimensions: list[tuple[str, set]] = []
+    kind = group.get("kind")
+    if kind == "field_all_values":
+        field = group.get("field")
+        if field in df.columns:
+            for value in df[field].dropna().unique().tolist():
+                if str(value).strip():
+                    ids = set(df.loc[df[field] == value, FIELD_STUDENT_ID].tolist())
+                    dimensions.append((str(value), ids))
+    elif kind == "fields":
+        for field in group.get("fields", []):
+            if field in df.columns:
+                dimensions.append((str(field), set(resolve_group_members(df, {"kind": "field", "field": field}))))
+    elif kind in {"field", "field_value", "members", "all"}:
+        try:
+            dimensions.append((constraint.label_hebrew, set(resolve_group_members(df, group))))
+        except Exception:
+            pass
+
+    measured = []
+    for label, members in dimensions:
+        counts = [sum(1 for sid in members if assignment.get(sid) == cls) for cls in range(num_classes)]
+        measured.append({"dimension": label, "counts_by_class": counts, "spread": max(counts) - min(counts) if counts else 0})
+    measured.sort(key=lambda item: item["spread"], reverse=True)
+    return {
+        "constraint_id": constraint.id,
+        "label_hebrew": constraint.label_hebrew,
+        "weight": constraint.args.get("weight"),
+        "total_spread": sum(item["spread"] for item in measured),
+        "worst_dimensions": measured[:8],
     }
 
 
@@ -125,7 +209,10 @@ def _baseline(sess, constraints, cfg) -> Optional[dict]:
     return {
         "class_sizes": list(gm.class_sizes),
         "size_spread": gm.class_size_spread,
+        "academic_spread": gm.academic_level_spread,
         "violations": gm.violations_count,
+        "friendship_available": gm.students_with_requests > 0,
+        "students_with_requests": gm.students_with_requests,
         "mutual_pct": gm.mutual_satisfied_pct,
         "two_friends_pct": gm.two_friends_satisfied_pct,
     }
@@ -164,7 +251,13 @@ def _counting_impossibility(df, constraints: list[Constraint], k: int) -> Option
     return None
 
 
-def _run(sess, constraints: list[Constraint], cfg, change_description: str) -> dict:
+def _run(
+    sess,
+    constraints: list[Constraint],
+    cfg,
+    change_description: str,
+    diagnostic_constraint: Optional[Constraint] = None,
+) -> dict:
     """Solve a hypothetical and report it against the current result."""
     df = sess.mapped_df
     matched = sess.friendship_result.matched if sess.friendship_result else {}
@@ -198,7 +291,7 @@ def _run(sess, constraints: list[Constraint], cfg, change_description: str) -> d
 
     _cfg_now, current_constraints = build_solver_inputs(sess)
     before = _baseline(sess, current_constraints, _cfg_now)
-    after = _snapshot(df, result.assignment, constraints, sim_cfg)
+    after = _snapshot(df, result.assignment, matched, constraints, sim_cfg)
 
     out = {
         "change": change_description,
@@ -211,10 +304,20 @@ def _run(sess, constraints: list[Constraint], cfg, change_description: str) -> d
         out["before"] = before
         out["deltas"] = {
             "size_spread": after["size_spread"] - before["size_spread"],
+            "academic_spread": after["academic_spread"] - before["academic_spread"],
             "violations": after["violations"] - before["violations"],
             "mutual_pct": round(after["mutual_pct"] - before["mutual_pct"], 1),
             "two_friends_pct": round(after["two_friends_pct"] - before["two_friends_pct"], 1),
         }
+        if diagnostic_constraint is not None:
+            current_target = next(
+                (c for c in current_constraints if c.id == diagnostic_constraint.id),
+                diagnostic_constraint,
+            )
+            out["targeted_balance"] = {
+                "before": _balance_diagnostic(df, sess.adjustment_state.assignment, _cfg_now.num_classes, current_target),
+                "after": _balance_diagnostic(df, result.assignment, sim_cfg.num_classes, diagnostic_constraint),
+            }
     else:
         out["note"] = "No current result to compare against; these are the figures the change would produce."
     return out
@@ -318,10 +421,272 @@ def _simulate_rule_toggle(sess, args: SimulateRuleToggleArgs) -> dict:
     return _run(sess, constraints, cfg, desc)
 
 
+def _simulate_friendship_priority(sess, args: SimulateFriendshipPriorityArgs) -> dict:
+    cfg, constraints = _prepared(sess)
+    target = next((c for c in constraints if c.id == args.constraint_id), None)
+    if target is None:
+        return {"error": "unknown_constraint", "detail": "No active rule with that id; call get_active_rules first."}
+    if target.type != "friendship_objective":
+        return {"error": "not_friendship_objective", "detail": f"Rule {args.constraint_id} is of type {target.type}."}
+    if args.weight_mutual is None and args.weight_two_friends is None:
+        return {"error": "bad_arguments", "detail": "Provide at least one friendship weight."}
+
+    old_mutual = int(target.args.get("weight_mutual", 0))
+    old_two = int(target.args.get("weight_two_friends", 0))
+    new_mutual = old_mutual if args.weight_mutual is None else args.weight_mutual
+    new_two = old_two if args.weight_two_friends is None else args.weight_two_friends
+    if new_mutual == old_mutual and new_two == old_two:
+        return {"error": "no_change", "detail": "The friendship priorities already have those values."}
+    target.args["weight_mutual"] = new_mutual
+    target.args["weight_two_friends"] = new_two
+    desc = f"friendship priorities: mutual {old_mutual}->{new_mutual}, two friends {old_two}->{new_two}"
+    return _run(sess, constraints, cfg, desc)
+
+
+def _simulate_balance_priority(sess, args: SimulateBalancePriorityArgs) -> dict:
+    cfg, constraints = _prepared(sess)
+    target = next((c for c in constraints if c.id == args.constraint_id), None)
+    if target is None:
+        return {"error": "unknown_constraint", "detail": "No active rule with that id; call get_active_rules first."}
+    if target.type != "balance":
+        return {"error": "not_balance_objective", "detail": f"Rule {args.constraint_id} is of type {target.type}."}
+    old_weight = float(target.args.get("weight", 1))
+    if float(args.weight) == old_weight:
+        return {"error": "no_change", "detail": "The balance preference already has that weight."}
+    target.args["weight"] = float(args.weight)
+    desc = f'priority of "{target.label_hebrew}": {old_weight:g}->{float(args.weight):g}'
+    return _run(sess, constraints, cfg, desc, diagnostic_constraint=target)
+
+
+def _find_class_size_balance_moves(sess, _args: FindClassSizeBalanceMovesArgs) -> dict:
+    """Find specific, safe single moves that close the current size gap."""
+    if sess.adjustment_state is None or sess.opt_result is None or not sess.opt_result.is_feasible:
+        return {"error": "no_assignment_yet", "detail": "A current assignment is required."}
+    cfg, constraints = _prepared(sess)
+    assignment = sess.adjustment_state.assignment
+    matched = sess.friendship_result.matched if sess.friendship_result else {}
+    before = _snapshot(sess.mapped_df, assignment, matched, constraints, cfg)
+    sizes = before["class_sizes"]
+    if not sizes or max(sizes) == min(sizes):
+        return {"already_balanced": True, "before": before, "candidates": []}
+
+    largest = {index for index, size in enumerate(sizes) if size == max(sizes)}
+    smallest = {index for index, size in enumerate(sizes) if size == min(sizes)}
+    candidates = []
+    checked = 0
+    for student_id, source_class in assignment.items():
+        if source_class not in largest or student_id in (sess.locked_assignment or {}):
+            continue
+        for target_class in smallest:
+            checked += 1
+            candidate_assignment = dict(assignment)
+            candidate_assignment[student_id] = target_class
+            after = _snapshot(sess.mapped_df, candidate_assignment, matched, constraints, cfg)
+            if after["violations"] != 0 or after["size_spread"] >= before["size_spread"]:
+                continue
+            candidates.append(
+                {
+                    "student": sess.token_map.token_for(student_id),
+                    "from_class": source_class + 1,
+                    "to_class": target_class + 1,
+                    "after": after,
+                    "deltas": {
+                        "size_spread": after["size_spread"] - before["size_spread"],
+                        "academic_spread": (
+                            after["academic_spread"] - before["academic_spread"]
+                            if after["academic_spread"] is not None and before["academic_spread"] is not None
+                            else None
+                        ),
+                        "mutual_pct": round(after["mutual_pct"] - before["mutual_pct"], 1),
+                        "two_friends_pct": round(after["two_friends_pct"] - before["two_friends_pct"], 1),
+                    },
+                }
+            )
+
+    def rank(item):
+        delta = item["deltas"]
+        academic = delta["academic_spread"] if delta["academic_spread"] is not None else 0
+        return (
+            item["after"]["size_spread"],
+            academic,
+            -delta["mutual_pct"],
+            -delta["two_friends_pct"],
+            item["student"],
+        )
+
+    candidates.sort(key=rank)
+    return {
+        "before": before,
+        "largest_classes": [index + 1 for index in sorted(largest)],
+        "smallest_classes": [index + 1 for index in sorted(smallest)],
+        "checked_direct_moves": checked,
+        "safe_direct_moves_found": len(candidates),
+        "candidates": candidates[:5],
+        "method": (
+            "Every unlocked student in a largest class was tested in every smallest class. Candidates shown create "
+            "no mandatory-rule violation and are ranked by resulting size spread, academic spread, then friendship."
+        ),
+        "causality_limit": (
+            "These are measured correction options, not an explanation of why the original solver selected its exact assignment."
+        ),
+    }
+
+
+def _student_social_snapshot(student_id, assignment, matched) -> dict:
+    class_index = assignment.get(student_id)
+    requested = [other for other in matched.get(student_id, []) if other != student_id]
+    together = [other for other in requested if assignment.get(other) == class_index]
+    mutual = [other for other in together if student_id in matched.get(other, [])]
+    return {
+        "class": class_index + 1 if class_index is not None else None,
+        "requests_made": len(requested),
+        "requested_friends_together": len(together),
+        "mutual_friends_together": len(mutual),
+    }
+
+
+def _simulate_student_move(sess, args: SimulateStudentMoveArgs) -> dict:
+    """Measure a direct move and, when useful, all compensating swaps."""
+    if sess.adjustment_state is None or sess.opt_result is None or not sess.opt_result.is_feasible:
+        return {"error": "no_assignment_yet", "detail": "A current assignment is required."}
+    student_id = sess.token_map.id_for(args.student)
+    if student_id is None or student_id not in sess.adjustment_state.assignment:
+        return {"error": "unknown_student_token", "detail": "That student token is not part of the current assignment."}
+
+    cfg, constraints = _prepared(sess)
+    target_class = args.class_number - 1
+    if target_class < 0 or target_class >= cfg.num_classes:
+        return {"error": "bad_arguments", "detail": f"Class must be between 1 and {cfg.num_classes}."}
+
+    assignment = sess.adjustment_state.assignment
+    source_class = assignment[student_id]
+    if source_class == target_class:
+        return {"error": "no_change", "detail": "The student is already in that class."}
+    if student_id in (sess.locked_assignment or {}):
+        return {
+            "error": "student_locked",
+            "detail": "The student's current placement is manually locked. It must be explicitly unlocked before testing a move.",
+        }
+
+    df = sess.mapped_df
+    matched = sess.friendship_result.matched if sess.friendship_result else {}
+    before = _snapshot(df, assignment, matched, constraints, cfg)
+    before_violation_rows = df_records(violations_report(df, assignment, constraints, cfg.num_classes))
+    before_social = _student_social_snapshot(student_id, assignment, matched)
+
+    direct_assignment = dict(assignment)
+    direct_assignment[student_id] = target_class
+    direct = _snapshot(df, direct_assignment, matched, constraints, cfg)
+    direct_violation_rows = df_records(violations_report(df, direct_assignment, constraints, cfg.num_classes))
+    direct_social = _student_social_snapshot(student_id, direct_assignment, matched)
+    direct_result = {
+        "preserves_all_mandatory_rules": direct["violations"] == 0,
+        "after": direct,
+        "student_outcome": direct_social,
+        "student_outcome_deltas": {
+            "requested_friends_together": direct_social["requested_friends_together"] - before_social["requested_friends_together"],
+            "mutual_friends_together": direct_social["mutual_friends_together"] - before_social["mutual_friends_together"],
+        },
+        "global_deltas": {
+            "size_spread": direct["size_spread"] - before["size_spread"],
+            "academic_spread": (
+                direct["academic_spread"] - before["academic_spread"]
+                if direct["academic_spread"] is not None and before["academic_spread"] is not None
+                else None
+            ),
+            "mutual_pct": round(direct["mutual_pct"] - before["mutual_pct"], 1),
+            "two_friends_pct": round(direct["two_friends_pct"] - before["two_friends_pct"], 1),
+        },
+        "mandatory_violations_after": direct_violation_rows,
+    }
+
+    swap_candidates = []
+    checked_swaps = 0
+    for other_id, other_class in assignment.items():
+        if other_class != target_class or other_id == student_id or other_id in (sess.locked_assignment or {}):
+            continue
+        checked_swaps += 1
+        swapped = dict(assignment)
+        swapped[student_id] = target_class
+        swapped[other_id] = source_class
+        after = _snapshot(df, swapped, matched, constraints, cfg)
+        if after["violations"] != 0:
+            continue
+        student_after = _student_social_snapshot(student_id, swapped, matched)
+        other_before = _student_social_snapshot(other_id, assignment, matched)
+        other_after = _student_social_snapshot(other_id, swapped, matched)
+        swap_candidates.append(
+            {
+                "swap_with": sess.token_map.token_for(other_id),
+                "student_move": {"from_class": source_class + 1, "to_class": target_class + 1},
+                "other_student_move": {"from_class": target_class + 1, "to_class": source_class + 1},
+                "after": after,
+                "global_deltas": {
+                    "size_spread": after["size_spread"] - before["size_spread"],
+                    "academic_spread": (
+                        after["academic_spread"] - before["academic_spread"]
+                        if after["academic_spread"] is not None and before["academic_spread"] is not None
+                        else None
+                    ),
+                    "mutual_pct": round(after["mutual_pct"] - before["mutual_pct"], 1),
+                    "two_friends_pct": round(after["two_friends_pct"] - before["two_friends_pct"], 1),
+                },
+                "requested_student_outcome": student_after,
+                "requested_student_deltas": {
+                    "requested_friends_together": student_after["requested_friends_together"] - before_social["requested_friends_together"],
+                    "mutual_friends_together": student_after["mutual_friends_together"] - before_social["mutual_friends_together"],
+                },
+                "swap_partner_outcome": other_after,
+                "swap_partner_deltas": {
+                    "requested_friends_together": other_after["requested_friends_together"] - other_before["requested_friends_together"],
+                    "mutual_friends_together": other_after["mutual_friends_together"] - other_before["mutual_friends_together"],
+                },
+            }
+        )
+
+    def swap_rank(item):
+        global_delta = item["global_deltas"]
+        requested_delta = item["requested_student_deltas"]
+        partner_delta = item["swap_partner_deltas"]
+        academic = global_delta["academic_spread"] if global_delta["academic_spread"] is not None else 0
+        return (
+            -requested_delta["mutual_friends_together"],
+            -requested_delta["requested_friends_together"],
+            -partner_delta["mutual_friends_together"],
+            academic,
+            -global_delta["mutual_pct"],
+            item["swap_with"],
+        )
+
+    swap_candidates.sort(key=swap_rank)
+    return {
+        "student": args.student,
+        "requested_move": {"from_class": source_class + 1, "to_class": target_class + 1},
+        "before": before,
+        "student_before": before_social,
+        "mandatory_violations_before": before_violation_rows,
+        "direct_move": direct_result,
+        "compensating_swap_search": {
+            "checked": checked_swaps,
+            "safe_swaps_found": len(swap_candidates),
+            "best_candidates": swap_candidates[:5],
+        },
+        "method": (
+            "The direct move was measured with everyone else fixed. Every unlocked student in the destination class was then "
+            "tested as a one-for-one swap; only swaps with zero mandatory-rule violations are shown."
+        ),
+        "causality_limit": "These are measured alternatives, not proof of why the solver chose the current placement.",
+    }
+
+
 _SIM_DISPATCH = {
     "simulate_capacity_change": _simulate_capacity_change,
     "simulate_class_count": _simulate_class_count,
     "simulate_rule_toggle": _simulate_rule_toggle,
+    "simulate_friendship_priority": _simulate_friendship_priority,
+    "simulate_balance_priority": _simulate_balance_priority,
+    "find_class_size_balance_moves": _find_class_size_balance_moves,
+    "simulate_student_move": _simulate_student_move,
 }
 
 

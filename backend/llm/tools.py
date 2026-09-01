@@ -101,12 +101,48 @@ class ModifyConstraintArgs(BaseModel):
     constraint_id: str = Field(description="id of the existing rule to change, from the active rules list in context")
     hard: Optional[bool] = Field(default=None, description="Set to change whether the rule is mandatory or a soft preference")
     active: Optional[bool] = Field(default=None, description="Set to false to deactivate the rule without deleting it")
+    min_per_class: Optional[int] = Field(default=None, ge=0, description="New per-class minimum for a capacity rule")
+    max_per_class: Optional[int] = Field(default=None, ge=0, description="New per-class maximum for a capacity rule")
+    weight: Optional[float] = Field(default=None, gt=0, description="New relative importance for a balance preference")
+    weight_mutual: Optional[float] = Field(default=None, gt=0, description="New importance of at least one mutual friend")
+    weight_two_friends: Optional[float] = Field(default=None, gt=0, description="New importance of placing at least two requested friends")
     rationale_hebrew: str = Field(description="One short plain-Hebrew sentence explaining the change, shown to the counselor to confirm")
 
 
 class RemoveConstraintArgs(BaseModel):
     constraint_id: str = Field(description="id of the existing rule to remove, from the active rules list in context")
     rationale_hebrew: str = Field(description="One short plain-Hebrew sentence explaining why, shown to the counselor to confirm")
+
+
+class ProposeStudentPlacementArgs(BaseModel):
+    student: str = Field(description="Anonymized token for the student to move or preserve")
+    class_number: int = Field(ge=1, description="Destination class number shown to the counselor, 1-based")
+    lock_after_move: bool = Field(
+        default=False,
+        description="True when the counselor wants this placement preserved during later optimization runs",
+    )
+    rerun_after: bool = Field(default=False, description="True when the counselor also asked to optimize again after applying this move")
+    rationale_hebrew: str = Field(description="One short plain-Hebrew sentence describing the exact move and lock state")
+
+
+class ProposeStudentLockArgs(BaseModel):
+    student: str = Field(description="Anonymized token for the student whose current placement should be locked or unlocked")
+    locked: bool = Field(description="True to preserve the current placement; false to allow later optimization to move her")
+    rerun_after: bool = Field(default=False, description="True when the counselor also asked to optimize again after changing the lock")
+    rationale_hebrew: str = Field(description="One short plain-Hebrew sentence describing the lock change")
+
+
+class ProposeRestoreVersionArgs(BaseModel):
+    version_id: str = Field(description="Exact stored version id returned by get_assignment_versions")
+    rationale_hebrew: str = Field(description="One short plain-Hebrew sentence identifying the version to restore and why")
+
+
+class ProposeStudentDataEditArgs(BaseModel):
+    student: str = Field(description="Anonymized token for the student whose project data should be corrected")
+    field: str = Field(description="Exact editable column key returned by get_student_record or get_dataset_columns")
+    value: str | bool = Field(description="The concrete corrected value explicitly supplied or confirmed by the counselor")
+    rerun_after: bool = Field(default=False, description="True only when the counselor also asked to rerun after approving the correction")
+    rationale_hebrew: str = Field(description="A short Hebrew explanation containing the current value and proposed corrected value")
 
 
 TOOL_MODELS: dict[str, type[BaseModel]] = {
@@ -117,6 +153,10 @@ TOOL_MODELS: dict[str, type[BaseModel]] = {
     "propose_balance": ProposeBalanceArgs,
     "modify_constraint": ModifyConstraintArgs,
     "remove_constraint": RemoveConstraintArgs,
+    "propose_student_placement": ProposeStudentPlacementArgs,
+    "propose_student_lock": ProposeStudentLockArgs,
+    "propose_restore_version": ProposeRestoreVersionArgs,
+    "propose_student_data_edit": ProposeStudentDataEditArgs,
 }
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -128,6 +168,26 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "modify_constraint": "שנה כלל קיים (הפוך לקשה/רך, הפעל/בטל), על פי מזהה מהרשימה הפעילה.",
     "remove_constraint": "הסר כלל קיים, על פי מזהה מהרשימה הפעילה.",
 }
+
+
+TOOL_DESCRIPTIONS.update(
+    {
+        "propose_student_placement": (
+            "Propose moving a specific student to a visible class number, optionally locking that placement "
+            "for future solver runs. Use only when an assignment already exists."
+        ),
+        "propose_student_lock": "Propose locking or unlocking a student's current assigned class for future solver runs.",
+        "propose_restore_version": (
+            "Propose restoring an earlier stored assignment version. Call get_assignment_versions first and use "
+            "its exact version id."
+        ),
+        "propose_student_data_edit": (
+            "Propose correcting one value in the editable project copy of the uploaded roster. Call get_student_record first. "
+            "Never infer a sensitive or missing value; it must be explicitly provided by the counselor. The original workbook "
+            "is preserved, and the correction requires approval."
+        ),
+    }
+)
 
 
 def build_tool_definitions() -> list[dict]:

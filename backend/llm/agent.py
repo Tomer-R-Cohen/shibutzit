@@ -42,7 +42,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .provider import ToolCall, chat_completion
+from .provider import ToolCall, chat_completion, chat_completion_stream
 from .planning_tools import (
     MUTATING_PLANNING_TOOLS,
     build_planning_tool_definitions,
@@ -130,7 +130,15 @@ def _tool_result_message(call: ToolCall, payload: dict) -> dict:
     }
 
 
-def run_agent_turn(sess, system_prompt: str, history: list[dict], validate_write=None) -> AgentTurn:
+def run_agent_turn(
+    sess,
+    system_prompt: str,
+    history: list[dict],
+    validate_write=None,
+    tools_override=None,
+    on_text_delta=None,
+    on_event=None,
+) -> AgentTurn:
     """Drive one counselor message to either an answer or a proposal.
 
     `history` is the persisted user/assistant transcript; it is copied, not
@@ -144,11 +152,19 @@ def run_agent_turn(sess, system_prompt: str, history: list[dict], validate_write
     """
     messages = list(history)
     turn = AgentTurn()
-    tools = build_agent_tools()
+    tools = build_agent_tools() if tools_override is None else tools_override
     budget = {"simulations": MAX_SIMULATIONS_PER_TURN, "dirty": False}
 
     for step in range(MAX_STEPS):
-        completion = chat_completion(system_prompt=system_prompt, messages=messages, tools=tools)
+        if on_text_delta is None:
+            completion = chat_completion(system_prompt=system_prompt, messages=messages, tools=tools)
+        else:
+            completion = chat_completion_stream(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                on_text_delta=on_text_delta,
+            )
 
         if not completion.tool_calls:
             turn.text = completion.text or ""
@@ -200,7 +216,14 @@ def run_agent_turn(sess, system_prompt: str, history: list[dict], validate_write
                 "agent step=%d tool=%s args=%s -> %s",
                 step, call.name, call.arguments, "error" if "error" in payload else "ok",
             )
-            turn.steps.append({"tool": call.name, "args": call.arguments, "ok": "error" not in payload})
+            # Keep the payload inside this in-memory turn so the API layer
+            # can enforce grounded counselor-facing renderers for sensitive
+            # explanations. Routers expose only tool/ok, never this payload.
+            turn.steps.append(
+                {"tool": call.name, "args": call.arguments, "ok": "error" not in payload, "result": payload}
+            )
+            if on_event is not None:
+                on_event({"type": "tool", "tool": call.name, "ok": "error" not in payload})
             messages.append(_tool_result_message(call, payload))
 
     # Out of steps with the model still calling tools. Ask it once more with
@@ -209,9 +232,59 @@ def run_agent_turn(sess, system_prompt: str, history: list[dict], validate_write
     turn.hit_step_limit = True
     turn.state_changed = budget["dirty"]
     try:
-        final = chat_completion(system_prompt=system_prompt, messages=messages, tools=[])
+        if on_text_delta is None:
+            final = chat_completion(system_prompt=system_prompt, messages=messages, tools=[])
+        else:
+            final = chat_completion_stream(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=[],
+                on_text_delta=on_text_delta,
+            )
         turn.text = final.text or ""
     except Exception:
         logger.exception("agent forced-answer call failed")
         turn.text = "לא הצלחתי להשלים את הבדיקה. אפשר לנסות לשאול שוב, אולי ממוקד יותר?"
     return turn
+
+
+def run_grounded_analysis_turn(
+    user_message: str,
+    evidence: dict,
+    required_content: str,
+    on_text_delta=None,
+) -> AgentTurn:
+    """Let the LLM reason over a completed analysis without tool-loop noise.
+
+    This is intentionally not a deterministic renderer. The model owns the
+    explanation, emphasis, and conversational next step. Its input is kept
+    narrow so facts from a completed solver experiment are not lost among the
+    large general agent prompt or biased by an earlier imperfect answer.
+    """
+    system_prompt = """את/ה יועצ/ת מקצועי/ת לשיבוץ תלמידות. ענה/י בעברית טבעית, ישירה ושיחתית.
+
+קיבלת חבילת ראיות שנמדדה מהשיבוץ, מהשוואת גרסאות, ולעיתים מהרצת ניסוי אמיתית. השתמש/י באינטליגנציה שלך כדי לפרש
+את המשמעות ולנהל דיון, אך אל תשנה/י, תשמיט/י או תמציא/י עובדות. הבדל/י בין:
+- מצב שנמדד בשיבוץ הנוכחי;
+- כלל שמסביר מה היה מותר, אך לא בהכרח מה גרם לבחירה;
+- השוואה בין גרסאות או תוצאה שנמדדה בניסוי שכבר הסתיים, רק אם ראיה כזאת אכן קיימת.
+
+אל תטען/י שיעד מסוים גרם לחלוקה המדויקת אלא אם הראיות מוכיחות זאת. אל תגיד/י שתבצע/י
+בדיקה בעתיד כאשר תוצאת הניסוי כבר מופיעה, ואל תכנה/י השוואת גרסאות "ניסוי". אל תשתמש/י בשפה שיווקית או בתבנית דוח. סיים/י
+בשאלה אחת שמקדמת החלטה משותפת, בלי להחיל שינוי בעצמך."""
+    system_prompt += "\n\nדרישות תוכן מחייבות לתשובה הנוכחית:\n" + required_content
+    payload = {
+        "question": user_message,
+        "evidence": evidence,
+    }
+    messages = [{"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)}]
+    if on_text_delta is None:
+        completion = chat_completion(system_prompt=system_prompt, messages=messages, tools=[])
+    else:
+        completion = chat_completion_stream(
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=[],
+            on_text_delta=on_text_delta,
+        )
+    return AgentTurn(text=completion.text or "")

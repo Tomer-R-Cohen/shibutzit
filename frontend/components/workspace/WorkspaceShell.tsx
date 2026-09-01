@@ -19,23 +19,25 @@ export default function WorkspaceShell({
   topBar,
   conversation,
   inspector,
+  inspectorVisible = true,
   inspectorOpen,
   onCloseInspector,
 }: {
   topBar: ReactNode;
   conversation: ReactNode;
   inspector: ReactNode;
+  inspectorVisible?: boolean;
   inspectorOpen?: boolean;
   onCloseInspector?: () => void;
 }) {
   return (
     <div className="ws-shell">
       {topBar}
-      <div className="ws-main">
+      <div className={`ws-main${inspectorVisible ? "" : " conversation-only"}`}>
         {conversation}
-        {inspector}
-        {inspectorOpen && (
-          <button type="button" className="ws-insp-scrim" aria-label="סגירת תמונת המצב" onClick={onCloseInspector} />
+        {inspectorVisible && inspector}
+        {inspectorVisible && inspectorOpen && (
+          <div className="ws-insp-scrim" aria-hidden="true" onClick={onCloseInspector} />
         )}
       </div>
     </div>

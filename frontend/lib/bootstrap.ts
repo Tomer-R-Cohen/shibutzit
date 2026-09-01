@@ -30,15 +30,16 @@ export interface DataReadiness {
   allFeasible: boolean;
 }
 
-// Default physical layout of the standard workbook (header row 4, data 5–221).
-const DEFAULT_LOAD = { useDefault: true, headerRow: 4, firstDataRow: 5, lastDataRow: 221 };
+// Bundled stress scenario: header row 4 and 84 fictional students on rows
+// 5–88. Uploaded files continue through the independent inference path.
+const DEFAULT_LOAD = { useDefault: true, headerRow: 4, firstDataRow: 5, lastDataRow: 88 };
 
 // Required fields that must resolve to a column. `ethiopian_origin` is exempt
 // because the source file encodes it in the origin column and the mapper may
 // legitimately leave it unmapped — matching the /steps/data validation.
 function unmappedRequired(guess: MappingGuessResponse): string[] {
   return guess.required_fields.filter(
-    (f) => f !== "ethiopian_origin" && !guess.mapping[f] && !guess.manual_fields.includes(f)
+    (f) => f !== "student_id" && f !== "ethiopian_origin" && !guess.mapping[f] && !guess.manual_fields.includes(f)
   );
 }
 

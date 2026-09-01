@@ -26,7 +26,15 @@ export default function Dialog({
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="ws-dialog-overlay" />
-        <RadixDialog.Content className="ws-dialog-content" aria-describedby={undefined}>
+        <RadixDialog.Content
+          className="ws-dialog-content"
+          aria-describedby={undefined}
+          // The board contains reversible async actions whose Sonner toast
+          // is portalled outside Radix's modal subtree. Treat that toast as
+          // an action surface, not as a request to dismiss the workspace.
+          // The visible close button and Escape remain available.
+          onPointerDownOutside={(event) => event.preventDefault()}
+        >
           <RadixDialog.Title className="sr-only">{title}</RadixDialog.Title>
           <RadixDialog.Close asChild>
             <button className="ws-dialog-close" aria-label="סגירה">

@@ -64,6 +64,8 @@ export default function Composer({
     <div className="ws-composer-row">
       <form
         className="ws-composer-surface"
+        aria-label="שליחת הודעה לעוזרת השיבוץ"
+        aria-busy={sending}
         onSubmit={(e) => {
           e.preventDefault();
           submit();
@@ -78,12 +80,21 @@ export default function Composer({
           rows={1}
           dir="auto"
           className="ws-composer-textarea"
-          disabled={sending}
+          aria-label="כתיבת הודעה לעוזרת השיבוץ"
+          aria-describedby="ws-composer-note"
         />
-        <button type="submit" className="ws-composer-send" disabled={sending || !input.trim()} aria-label="שליחה">
+        <button
+          type="submit"
+          className="ws-composer-send"
+          disabled={sending || !input.trim()}
+          aria-label={sending ? "העוזרת משיבה כעת" : "שליחה"}
+        >
           <Icon name="send" size={16} />
         </button>
       </form>
+      <p id="ws-composer-note" className="ws-composer-note">
+        כללי חובה משתנים רק באישור שלך
+      </p>
     </div>
   );
 }

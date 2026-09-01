@@ -37,6 +37,10 @@ class GlobalMetrics:
     partial_requests: int
     unsatisfied_requests: int
     violations_count: int
+    # Sum, across the academic categories present in the workbook, of the
+    # largest class count minus the smallest. Lower is more even. None means
+    # the source data has no usable academic category to measure.
+    academic_level_spread: Optional[int] = None
     # How many students submitted at least one friend request at all --
     # distinguishes "0% satisfied because no one asked" (this is 0) from
     # "0% satisfied because every request failed" (this is > 0). Callers
@@ -46,6 +50,28 @@ class GlobalMetrics:
     solver_status: str = ""
     solver_wall_time: float = 0.0
     objective_value: Optional[float] = None
+
+
+def academic_level_spread(
+    df: pd.DataFrame,
+    assignment: dict[int, int],
+    num_classes: int,
+) -> Optional[int]:
+    """Return a reproducible categorical academic-balance measure."""
+    if FIELD_ACADEMIC_LEVEL not in df.columns or FIELD_STUDENT_ID not in df.columns:
+        return None
+    usable = df[[FIELD_STUDENT_ID, FIELD_ACADEMIC_LEVEL]].dropna()
+    usable = usable[usable[FIELD_ACADEMIC_LEVEL].astype(str).str.strip().ne("")]
+    levels = usable[FIELD_ACADEMIC_LEVEL].unique().tolist()
+    if not levels:
+        return None
+    total = 0
+    for level in levels:
+        student_ids = set(usable.loc[usable[FIELD_ACADEMIC_LEVEL] == level, FIELD_STUDENT_ID].tolist())
+        counts = [sum(1 for student_id in student_ids if assignment.get(student_id) == class_index) for class_index in range(num_classes)]
+        if counts:
+            total += max(counts) - min(counts)
+    return total
 
 
 def student_assignment_table(
@@ -68,6 +94,11 @@ def student_assignment_table(
         satisfied_count = len(requested_same_class)
         has_mutual = len(mutual_same_class) >= 1
         has_two = satisfied_count >= 2
+        attention = ""
+        if requested and satisfied_count == 0:
+            attention = f"אף אחת מ-{len(requested)} בקשות החברות לא קיבלה מענה"
+        elif len(requested) >= 2 and satisfied_count == 1:
+            attention = f"רק בקשת חברות אחת מתוך {len(requested)} קיבלה מענה"
 
         rows.append(
             {
@@ -89,7 +120,7 @@ def student_assignment_table(
                 "לפחות חברה הדדית אחת": has_mutual,
                 "לפחות 2 חברות מבוקשות": has_two,
                 "נעולה": sid in locked,
-                "אזהרות": "",
+                "אזהרות": attention,
             }
         )
     return pd.DataFrame(rows)
@@ -233,8 +264,7 @@ def compute_global_metrics(
     mutual_pct = 100.0 * mutual_hits / denom_students if denom_students else 0.0
     two_pct = 100.0 * two_hits / denom_students if denom_students else 0.0
 
-    class_overview = class_overview_table(df, assignment, friendship_matched, constraints, num_classes)
-    violations_count = int(class_overview["חריגות"].sum()) if not class_overview.empty else 0
+    violations_count = len(violations_report(df, assignment, constraints, num_classes))
 
     return GlobalMetrics(
         total_students=len(df),
@@ -249,6 +279,7 @@ def compute_global_metrics(
         partial_requests=partial,
         unsatisfied_requests=unsatisfied,
         violations_count=violations_count,
+        academic_level_spread=academic_level_spread(df, assignment, num_classes),
         students_with_requests=students_with_requests,
         solver_status=solver_status,
         solver_wall_time=solver_wall_time,
@@ -262,32 +293,80 @@ def violations_report(
     constraints: list[Constraint],
     num_classes: int,
 ) -> pd.DataFrame:
-    """Build the violations & exceptions report: one row per (class, active
-    hard capacity constraint) pair currently out of bounds."""
+    """Build one authoritative report covering every supported hard rule.
+
+    Capacity violations are class-specific. Relationship, lock, and exact
+    balance rules produce a row when their solver semantics are not met.
+    This report drives approval safety, so omitting a rule type here would
+    allow a manual edit to look valid even though the solver would reject it.
+    """
     class_members = [
         {sid for sid, cls in assignment.items() if cls == c} for c in range(num_classes)
     ]
     rows = []
-    for con in _active_hard_capacity_constraints(constraints):
-        group_members = set(resolve_group_members(df, con.args["group"]))
-        lo = con.args.get("min")
-        hi = con.args.get("max")
-        expected = f"{lo if lo is not None else 0}-{hi if hi is not None else '∞'}"
-        for c in range(num_classes):
-            actual = len(group_members & class_members[c])
-            violated = (lo is not None and actual < lo) or (hi is not None and actual > hi)
-            if not violated:
-                continue
-            rows.append(
-                {
-                    "כלל": con.label_hebrew,
-                    "כיתה": c + 1,
-                    "צפוי": expected,
-                    "בפועל": actual,
-                    "חומרה": "גבוהה",
-                    "קשה/רכה": "קשה",
-                    "תיקון מוצע": "העברת תלמידה מתאימה לכיתה אחרת",
-                }
-            )
+    def add(con: Constraint, class_value, expected, actual, suggestion) -> None:
+        rows.append(
+            {
+                "כלל": con.label_hebrew,
+                "כיתה": class_value,
+                "צפוי": expected,
+                "בפועל": actual,
+                "חומרה": "גבוהה",
+                "קשה/רכה": "קשה",
+                "תיקון מוצע": suggestion,
+            }
+        )
+
+    known_students = set(assignment)
+    for con in constraints:
+        if not con.active or not con.hard:
+            continue
+        args = con.args
+        if con.type == "capacity":
+            group_members = set(resolve_group_members(df, args["group"]))
+            lo = args.get("min")
+            hi = args.get("max")
+            expected = f"{lo if lo is not None else 0}-{hi if hi is not None else '∞'}"
+            for class_index in range(num_classes):
+                actual = len(group_members & class_members[class_index])
+                if (lo is not None and actual < lo) or (hi is not None and actual > hi):
+                    add(con, class_index + 1, expected, actual, "העברת תלמידה מתאימה לכיתה אחרת")
+        elif con.type == "separate":
+            first, second = args["student_a"], args["student_b"]
+            if first in known_students and second in known_students and assignment.get(first) == assignment.get(second):
+                add(con, assignment[first] + 1, "כיתות נפרדות", "אותה כיתה", "העברת אחת התלמידות לכיתה אחרת")
+        elif con.type == "together":
+            first, second = args["student_a"], args["student_b"]
+            if first in known_students and second in known_students and assignment.get(first) != assignment.get(second):
+                actual = f"כיתות {assignment[first] + 1} ו-{assignment[second] + 1}"
+                add(con, actual, "אותה כיתה", "כיתות שונות", "שיבוץ שתי התלמידות יחד")
+        elif con.type == "at_least_one_of":
+            student = args["student"]
+            candidates = [candidate for candidate in args.get("candidates", []) if candidate in known_students and candidate != student]
+            if student in known_students and candidates and not any(assignment.get(candidate) == assignment.get(student) for candidate in candidates):
+                add(con, assignment[student] + 1, "לפחות חברה אחת מהרשימה", "אף חברה", "שיבוץ חברה אחת לפחות באותה כיתה")
+        elif con.type == "locked":
+            student, target = args["student"], args["class_index"]
+            if student in known_students and assignment.get(student) != target:
+                add(con, assignment[student] + 1, f"כיתה {target + 1}", f"כיתה {assignment[student] + 1}", "החזרת התלמידה לכיתה המקובעת")
+        elif con.type == "balance":
+            group = args["group"]
+            if group.get("kind") == "field_all_values":
+                subgroups = [
+                    {"kind": "field_value", "field": group["field"], "value": value}
+                    for value in df[group["field"]].dropna().unique()
+                ]
+            elif group.get("kind") == "fields":
+                subgroups = [{"kind": "field", "field": field} for field in group["fields"]]
+            else:
+                subgroups = [group]
+            spreads = []
+            for subgroup in subgroups:
+                members = set(resolve_group_members(df, subgroup))
+                counts = [len(members & class_members[index]) for index in range(num_classes)]
+                if counts:
+                    spreads.append(max(counts) - min(counts))
+            if any(spread != 0 for spread in spreads):
+                add(con, "כל הכיתות", "פער 0", f"פער מרבי {max(spreads)}", "איזון מחדש בין הכיתות")
 
     return pd.DataFrame(rows)

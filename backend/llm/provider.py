@@ -112,6 +112,72 @@ def chat_completion(system_prompt: str, messages: list[dict], tools: list[dict])
     return ChatCompletion(text=msg.content, tool_calls=tool_calls, raw_message=raw_message)
 
 
+def chat_completion_stream(
+    system_prompt: str,
+    messages: list[dict],
+    tools: list[dict],
+    on_text_delta,
+) -> ChatCompletion:
+    """Streaming equivalent of ``chat_completion`` with identical output.
+
+    Text fragments are forwarded as they arrive, while fragmented tool-call
+    arguments are accumulated and validated only after the provider closes
+    the stream. The agent therefore keeps exactly the same safety boundary:
+    streaming changes presentation, never when a write tool is executed.
+    """
+    client = _client()
+    model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
+    text_parts: list[str] = []
+    tool_parts: dict[int, dict] = {}
+    try:
+        stream = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": system_prompt}, *messages],
+            tools=tools,
+            tool_choice="auto",
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                text_parts.append(delta.content)
+                on_text_delta(delta.content)
+            for tc in delta.tool_calls or []:
+                part = tool_parts.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                if tc.id:
+                    part["id"] = tc.id
+                if tc.function:
+                    if tc.function.name:
+                        part["name"] += tc.function.name
+                    if tc.function.arguments:
+                        part["arguments"] += tc.function.arguments
+    except Exception:
+        logger.exception("LLM streaming chat completion failed (model=%s)", model)
+        raise
+
+    calls: list[ToolCall] = []
+    raw_calls: list[dict] = []
+    for index in sorted(tool_parts):
+        part = tool_parts[index]
+        raw_args = part["arguments"] or "{}"
+        try:
+            args = json.loads(raw_args)
+        except json.JSONDecodeError:
+            args = {}
+        call_id = part["id"] or f"stream_call_{index}"
+        calls.append(ToolCall(id=call_id, name=part["name"], arguments=args))
+        raw_calls.append(
+            {"id": call_id, "type": "function", "function": {"name": part["name"], "arguments": raw_args}}
+        )
+    text = "".join(text_parts) or None
+    raw_message: dict = {"role": "assistant", "content": text}
+    if raw_calls:
+        raw_message["tool_calls"] = raw_calls
+    return ChatCompletion(text=text, tool_calls=calls, raw_message=raw_message)
+
+
 def text_completion(system_prompt: str, user_message: str) -> str:
     """One plain (no-tools) completion turn -- used for one-off narration
     tasks (e.g. explaining an infeasibility already proven deterministically

@@ -1,19 +1,11 @@
 """Excel workbook loading utilities.
 
-Loads the real source workbook ("רשימה כללית לאיזונית.xlsx") or any
-compatible workbook, without ever mutating the original file on disk.
+Loads the bundled, fully fictional agent stress-test workbook or any
+compatible uploaded workbook without ever mutating the original on disk.
 
-The real workbook has a fixed physical shape that this module knows about
-by default (but does not hard-code column letters into downstream logic):
-
-- Single sheet "Sheet1".
-- Header row is physical row 4 (1-indexed).
-- Data rows run from physical row 5 through row 221.
-- Columns B..H hold: index number, last name, first name, current school,
-  current class, origin ('א' marks Ethiopian-origin), academic achievement.
-- Column A is empty/unused.
-- Some data rows are blank spacer rows; these are filtered out based on the
-  running index column being empty (None).
+The bundled default has its header on physical row 4 and 84 student rows
+from rows 5 through 88. Its first sheet includes all supported assignment
+fields so the conversational agent can be exercised end to end.
 """
 
 from __future__ import annotations
@@ -23,11 +15,11 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-DEFAULT_WORKBOOK_PATH = "רשימה כללית לאיזונית.xlsx"
-DEFAULT_SHEET_NAME = "Sheet1"
+DEFAULT_WORKBOOK_PATH = os.path.join("sample_data", "agent_stress_test_students.xlsx")
+DEFAULT_SHEET_NAME = "תלמידות"
 DEFAULT_HEADER_ROW_1INDEXED = 4
 DEFAULT_FIRST_DATA_ROW_1INDEXED = 5
-DEFAULT_LAST_DATA_ROW_1INDEXED = 221
+DEFAULT_LAST_DATA_ROW_1INDEXED = 88
 
 
 class ExcelLoadError(Exception):
@@ -123,6 +115,14 @@ def load_workbook(
     else:
         df = df.iloc[first_pos:].copy()
 
+    # A user-selected range commonly includes spacer/trailing rows. They
+    # must never become anonymous "students" merely because no explicit
+    # index column was selected during automatic mapping.
+    before_blank_rows = len(df)
+    df = df.dropna(how="all").copy()
+    removed_blank_rows = before_blank_rows - len(df)
+    if removed_blank_rows:
+        notes.append(f"הוסרו {removed_blank_rows} שורות ריקות לחלוטין.")
     df.reset_index(drop=True, inplace=True)
 
     if index_column is not None and index_column in df.columns:
@@ -154,7 +154,7 @@ def load_workbook(
 
 
 def load_default_workbook() -> LoadedWorkbook:
-    """Load the real source workbook with its known default physical layout."""
+    """Load the bundled stress-test workbook with its known physical layout."""
     return load_workbook(
         DEFAULT_WORKBOOK_PATH,
         sheet_name=DEFAULT_SHEET_NAME,

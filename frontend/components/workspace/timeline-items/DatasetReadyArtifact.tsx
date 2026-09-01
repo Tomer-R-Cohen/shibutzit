@@ -1,4 +1,5 @@
 import { Icon } from "@/components/Icon";
+import type { DataProblem, RosterFocus } from "@/lib/workspace";
 
 // Fixed dot budget per row so a 217-student class doesn't render 217 dots --
 // each row is scaled proportionally to its share of the total, not a
@@ -34,6 +35,9 @@ export function DatasetReadyArtifact({
   levelCount,
   warningCount,
   levelCounts,
+  detectedFields,
+  missingFields,
+  friendshipCount,
   onOpenRoster,
 }: {
   studentCount: number;
@@ -41,6 +45,9 @@ export function DatasetReadyArtifact({
   levelCount: number;
   warningCount: number;
   levelCounts: Record<string, number>;
+  detectedFields: string[];
+  missingFields: string[];
+  friendshipCount: number;
   onOpenRoster: () => void;
 }) {
   return (
@@ -54,8 +61,18 @@ export function DatasetReadyArtifact({
         <span className="cw-num">{schoolCount} בתי ספר</span>
         <span className="cw-num">{levelCount} רמות לימודיות</span>
       </div>
+      <div className="ws-dataset-understood">
+        <span className="ws-dataset-understood-label">זיהיתי בקובץ</span>
+        <div className="ws-dataset-chips">
+          {detectedFields.map((field) => <span key={field}>{field}</span>)}
+        </div>
+      </div>
+      {friendshipCount > 0 && <div className="ws-artifact-note">{friendshipCount} בקשות חברות זוהו והותאמו</div>}
       <LevelDistribution levelCounts={levelCounts} total={studentCount} />
       {warningCount > 0 && <div className="ws-artifact-note">{warningCount} בקשות חברות לא זוהו בוודאות</div>}
+      {missingFields.length > 0 && (
+        <div className="ws-artifact-note ws-artifact-note-muted">לא נמצאו נתונים עבור: {missingFields.join(" · ")}. אפשר להמשיך בלעדיהם או להשלים בהמשך.</div>
+      )}
       <div className="ws-artifact-actions">
         <button type="button" className="ws-link" onClick={onOpenRoster}>
           צפייה ברשימת התלמידות
@@ -65,18 +82,36 @@ export function DatasetReadyArtifact({
   );
 }
 
-export function DataWarningArtifact({ problems }: { problems: string[] }) {
+export function DataWarningArtifact({ problems, onOpenRoster }: { problems: DataProblem[]; onOpenRoster: (focus?: RosterFocus) => void }) {
+  const correctable = problems.filter((problem) => problem.field && (problem.studentIds?.length ?? 0) > 0);
+  const focus: RosterFocus | undefined = correctable.length > 0
+    ? {
+        studentIds: [...new Set(correctable.flatMap((problem) => problem.studentIds ?? []))],
+        fields: [...new Set(correctable.flatMap((problem) => problem.field ? [problem.field] : []))],
+      }
+    : undefined;
   return (
     <div className="ws-artifact ws-artifact-warn">
       <div className="ws-artifact-head">
         <Icon name="warning" size={14} />
-        <span>צריך להשלים את התאמת העמודות</span>
+        <span>נמצאו פרטים שצריך לבדוק</span>
       </div>
       <ul className="ws-artifact-list">
         {problems.map((p, i) => (
-          <li key={i}>{p}</li>
+          <li key={i}>{p.message}</li>
         ))}
       </ul>
+      <p className="ws-artifact-guidance">
+        {focus
+          ? "נפתח את התלמידות הרלוונטיות בלבד. אפשר לבחור ערך תקין או להשלים את בית הספר, והשינוי יישמר בעותק העבודה בלי לשנות את קובץ המקור."
+          : "אפשר לפתוח את רשימת התלמידות כדי לבדוק ולתקן את הפרטים."}
+      </p>
+      <div className="ws-artifact-actions">
+        <button type="button" className="ws-warning-action" onClick={() => onOpenRoster(focus)}>
+          <Icon name="edit" size={14} />
+          {focus ? `פתיחת ${focus.studentIds.length} התלמידות לתיקון` : "פתיחת רשימת התלמידות"}
+        </button>
+      </div>
     </div>
   );
 }

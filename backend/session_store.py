@@ -8,9 +8,10 @@ The user-provided *inputs* (tuned rules, pre-locks, manually typed category
 data, and any custom column mapping) are persisted to disk per session so
 they survive a browser refresh, a backend restart, or a machine reboot —
 retyping category data for ~200 students was the single biggest rework risk.
-Derived state (the loaded workbook, mapped table, validation/feasibility
-reports, the solved assignment) is NOT persisted: it is cheaply rebuilt by
-re-loading the source file and re-running the solver with one click.
+The source location and immutable assignment snapshots are also persisted.
+On restart, the workbook and derived roster analysis are rebuilt from the
+source file, while a stored assignment version is restored without silently
+running the solver again.
 """
 
 from __future__ import annotations
@@ -19,7 +20,9 @@ import os
 import pickle
 import tempfile
 import threading
+import uuid
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 import pandas as pd
@@ -44,11 +47,36 @@ class PendingProposal:
     before it touches `Session.constraints`. Exactly one at a time per
     session -- a new chat message replaces whatever was pending."""
 
-    kind: Literal["propose", "modify", "remove"]
+    kind: Literal["propose", "modify", "remove", "assignment_action", "data_action"]
     summary_hebrew: str
     constraint: Optional[dict] = None  # kind == "propose": the built Constraint, as a plain dict
     target_constraint_id: Optional[str] = None  # kind in ("modify", "remove")
-    changes: Optional[dict] = None  # kind == "modify": {"hard": bool} and/or {"active": bool}
+    # kind == "modify": ordinary attribute changes, or
+    # {"batch": [{"constraint_id": str, "changes": {...}}, ...]} for one
+    # atomic counselor-approved package spanning several existing rules.
+    changes: Optional[dict] = None
+    action: Optional[Literal["move_student", "set_student_lock", "restore_version", "edit_student_data"]] = None
+    action_args: Optional[dict] = None
+    evidence: Optional[dict] = None
+
+
+@dataclass
+class AssignmentVersion:
+    """Immutable, reproducible snapshot of one accepted solver/manual state."""
+
+    number: int
+    reason: str
+    assignment: dict
+    locked_assignment: dict
+    run_config: dict
+    constraints: list[dict]
+    metrics: dict
+    result: dict
+    input_revision: int
+    mode: Literal["solver", "manual"] = "solver"
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:10])
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    approved: bool = False
 
 
 def _safe_name(session_id: str) -> str:
@@ -64,7 +92,13 @@ class Session:
     loaded_wb: Optional[LoadedWorkbook] = None
     col_mapping: Optional[ColumnMapping] = None
     mapped_df: Optional[pd.DataFrame] = None
+    source_path: Optional[str] = None
+    source_filename: Optional[str] = None
+    source_load_options: dict = field(default_factory=dict)
     manual_entry_df: Optional[pd.DataFrame] = None
+    # Confirmed corrections to the project's working copy. The uploaded
+    # workbook remains immutable; this overlay is reapplied after mapping.
+    student_data_edits: dict[int, dict[str, Any]] = field(default_factory=dict)
     validation_report: Any = None
     friendship_result: Optional[NameResolutionResult] = None
     unmatched_df: Optional[pd.DataFrame] = None
@@ -85,8 +119,19 @@ class Session:
     # Columns the counselor agreed to add to the workbook, recorded during
     # planning -- before any file exists. See src/data_requirements.py.
     data_requirements: list[DataRequirement] = field(default_factory=list)
+    # Durable instructions and an audit trail are structured project memory,
+    # not merely prose buried in chat history. They are included in every
+    # agent turn and persisted with the rest of the authoritative inputs.
+    user_notes: list[str] = field(default_factory=list)
+    decision_history: list[dict] = field(default_factory=list)
+    assignment_versions: list[AssignmentVersion] = field(default_factory=list)
+    current_version_id: Optional[str] = None
     chat_history: list[dict] = field(default_factory=list)
     pending_proposal: Optional[PendingProposal] = None
+    # Most recent measured recommendation offered in conversation. This is
+    # structured because a follow-up like "yes, use that" must resolve to the
+    # exact tested rule, not ask the model to reconstruct numbers from prose.
+    active_recommendation: Optional[dict] = None
     token_map: TokenMap = field(default_factory=TokenMap)
     # Monotonic version of every input that can affect the solver. A
     # successful solve records the exact version it consumed. This makes
@@ -99,6 +144,7 @@ class Session:
     def mark_inputs_changed(self, *, data_changed: bool = False, clear_result: bool = False) -> None:
         self.input_revision += 1
         self.feasibility_report = None
+        self.active_recommendation = None
         if data_changed:
             self.validation_report = None
             self.friendship_result = None
@@ -114,6 +160,10 @@ class Session:
         self.result_mode = "solver"
 
     def mark_manually_adjusted(self) -> None:
+        # A manual version is evaluated and snapshotted against the current
+        # inputs. It is current (though it may still contain violations,
+        # reported separately), not an old solver result.
+        self.solve_revision = self.input_revision
         self.result_mode = "manual"
 
     def result_state(self) -> dict:
@@ -171,6 +221,10 @@ class SessionStore:
             "run_config": asdict(sess.run_config) if sess.run_config else None,
             "locked_assignment": sess.locked_assignment,
             "manual_entry": sess.manual_entry_df,
+            "student_data_edits": sess.student_data_edits,
+            "source_path": sess.source_path,
+            "source_filename": sess.source_filename,
+            "source_load_options": dict(sess.source_load_options),
             "col_mapping": (
                 {"mapping": dict(cm.mapping), "manual_fields": sorted(cm.manual_fields)}
                 if cm is not None
@@ -182,8 +236,13 @@ class SessionStore:
                 {"id": r.id, "label": r.label, "kind": r.kind, "reason": r.reason, "values": list(r.values)}
                 for r in sess.data_requirements
             ],
+            "user_notes": list(sess.user_notes),
+            "decision_history": list(sess.decision_history),
+            "assignment_versions": [asdict(v) for v in sess.assignment_versions],
+            "current_version_id": sess.current_version_id,
             "chat_history": sess.chat_history,
             "pending_proposal": asdict(sess.pending_proposal) if sess.pending_proposal else None,
+            "active_recommendation": sess.active_recommendation,
             "token_map": {
                 "id_to_token": sess.token_map.id_to_token,
                 "token_to_id": sess.token_map.token_to_id,
@@ -246,6 +305,20 @@ class SessionStore:
         if manual is not None:
             sess.manual_entry_df = manual
 
+        raw_data_edits = payload.get("student_data_edits")
+        if isinstance(raw_data_edits, dict):
+            sess.student_data_edits = {
+                int(student_id): dict(values)
+                for student_id, values in raw_data_edits.items()
+                if isinstance(values, dict)
+            }
+
+        sess.source_path = payload.get("source_path")
+        sess.source_filename = payload.get("source_filename")
+        raw_load_options = payload.get("source_load_options")
+        if isinstance(raw_load_options, dict):
+            sess.source_load_options = raw_load_options
+
         cm_data = payload.get("col_mapping")
         if cm_data:
             try:
@@ -281,6 +354,22 @@ class SessionStore:
             except Exception:
                 pass
 
+        raw_notes = payload.get("user_notes")
+        if isinstance(raw_notes, list):
+            sess.user_notes = [str(note) for note in raw_notes if str(note).strip()]
+
+        raw_decisions = payload.get("decision_history")
+        if isinstance(raw_decisions, list):
+            sess.decision_history = [d for d in raw_decisions if isinstance(d, dict)][-100:]
+
+        raw_versions = payload.get("assignment_versions")
+        if isinstance(raw_versions, list):
+            try:
+                sess.assignment_versions = [AssignmentVersion(**v) for v in raw_versions if isinstance(v, dict)][-50:]
+            except Exception:
+                sess.assignment_versions = []
+        sess.current_version_id = payload.get("current_version_id")
+
         chat_history = payload.get("chat_history")
         if chat_history:
             sess.chat_history = chat_history
@@ -291,6 +380,10 @@ class SessionStore:
                 sess.pending_proposal = PendingProposal(**pp)
             except Exception:
                 pass
+
+        recommendation = payload.get("active_recommendation")
+        if isinstance(recommendation, dict):
+            sess.active_recommendation = recommendation
 
         tm = payload.get("token_map")
         if tm:
@@ -307,6 +400,53 @@ class SessionStore:
             sess.result_mode = mode if mode in ("solver", "manual") else "solver"
         except (TypeError, ValueError):
             pass
+
+        # Rebuild the derived workbook/mapped table when the persisted source
+        # still exists. This makes uploaded projects and version restoration
+        # survive a backend restart without persisting live domain objects.
+        if sess.source_path and os.path.exists(sess.source_path) and sess.col_mapping is not None:
+            try:
+                from src.column_mapping import apply_mapping
+                from src.dataset_schema import attach_extra_columns
+                from src.excel_loader import load_workbook
+
+                opts = sess.source_load_options
+                wb = load_workbook(
+                    sess.source_path,
+                    header_row_1indexed=int(opts.get("header_row", 4)),
+                    first_data_row_1indexed=int(opts.get("first_data_row", 5)),
+                    last_data_row_1indexed=int(opts["last_data_row"]) if opts.get("last_data_row") else None,
+                )
+                mapped = apply_mapping(wb.raw_df, sess.col_mapping, manual_df=sess.manual_entry_df)
+                if sess.dataset_schema.extras:
+                    mapped = attach_extra_columns(mapped, wb.raw_df, sess.dataset_schema)
+                from backend.data_edits import apply_student_data_edits
+
+                mapped = apply_student_data_edits(mapped, sess.student_data_edits)
+                sess.loaded_wb = wb
+                sess.mapped_df = mapped
+                # These are derived from the roster but affect every social
+                # metric and explanation. Rebuild them alongside the table
+                # so a restored version does not appear to have zero friend
+                # requests merely because the process restarted.
+                from src.friendship_graph import resolve_requests, unmatched_report
+                from src.validation import validate_students
+
+                sess.validation_report = validate_students(mapped)
+                sess.friendship_result = resolve_requests(mapped)
+                sess.unmatched_df = unmatched_report(sess.friendship_result)
+                current = next((v for v in sess.assignment_versions if v.id == sess.current_version_id), None)
+                if current is not None:
+                    sess.adjustment_state = AdjustmentState(
+                        assignment=dict(current.assignment),
+                        locked=set(current.locked_assignment.keys()),
+                    )
+                    sess.opt_result = OptimizationResult(**current.result)
+            except Exception:
+                # A missing/corrupt source should return the project to the
+                # upload flow, never discard the persisted decisions/rules.
+                sess.loaded_wb = None
+                sess.mapped_df = None
 
 
 store = SessionStore()

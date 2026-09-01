@@ -154,6 +154,7 @@ def test_planning_tool_bad_arguments_come_back_as_data(client, empty_session):
     assert execute_planning_tool("note_required_data", {"label": "x", "kind": "nonsense", "reason": "r"}, sess)["error"] == "bad_kind"
     assert execute_planning_tool("set_class_count", {"num_classes": 99}, sess)["error"] == "bad_arguments"
     assert execute_planning_tool("drop_required_data", {"label": "nope"}, sess)["error"] == "not_found"
+    assert execute_planning_tool("request_solver_run", {}, sess)["error"] == "no_dataset"
 
 
 def test_planning_tools_do_not_become_confirmation_cards(client, empty_session):
@@ -165,3 +166,31 @@ def test_planning_tools_do_not_become_confirmation_cards(client, empty_session):
 
     assert body["pending_proposal"] is None
     assert body["steps"] == [{"tool": "note_required_data", "ok": True}]
+
+
+def test_durable_project_note_is_structured_and_reaches_future_turns(client, empty_session):
+    fake, _ = _tool_then_text(
+        [("remember_project_note", {"note": "אין לרכך את כלל השילוב"})],
+        "אזכור את זה לאורך הפרויקט.",
+    )
+    with patch("backend.llm.agent.chat_completion", side_effect=fake):
+        first = client.post(
+            "/api/chat/message",
+            headers=empty_session,
+            json={"message": "אל תרככי בשום מצב את כלל השילוב"},
+        ).json()
+
+    assert first["state_changed"] is True
+    memory = client.get("/api/project-memory", headers=empty_session).json()
+    assert memory["notes"] == ["אין לרכך את כלל השילוב"]
+
+    seen = []
+
+    def answer_from_memory(system_prompt, messages, tools):
+        seen.append(system_prompt)
+        return ChatCompletion(text="כלל השילוב נשאר מוגן.", tool_calls=[], raw_message={"role": "assistant", "content": "x"})
+
+    with patch("backend.llm.agent.chat_completion", side_effect=answer_from_memory):
+        client.post("/api/chat/message", headers=empty_session, json={"message": "מה ביקשתי שלא לשנות?"})
+
+    assert "אין לרכך את כלל השילוב" in seen[0]

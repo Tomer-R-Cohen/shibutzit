@@ -71,28 +71,22 @@ click.
 
 ## Data expectations
 
-The app defaults to loading `רשימה כללית לאיזונית.xlsx` (never modified — all
-processing happens on in-memory copies). Its known physical layout:
+The app defaults to loading
+`sample_data/agent_stress_test_students.xlsx`. It is a fully fictional,
+84-student scenario designed to exercise file analysis, infeasibility
+diagnosis, explicit rule relaxation, solver reruns, and measured trade-offs.
+The file is never modified; processing happens on in-memory project copies.
 
-- Sheet `Sheet1`, header row at physical row 4, data rows 5–221.
-- Columns B–H: running index, last name (`שם משפחה`), first name
-  (`שם פרטי`), current school (`ביה"ס נוכחי`), current class (`כיתה`, 0–7,
-  sometimes blank), origin (`מוצא`, `א` = Ethiopian-origin), academic
-  achievement (`הישגים לימודיים`: מצטיינת / בינונית / חלשה).
-- Some data rows are blank spacers; these are dropped based on the running
-  index being empty.
+- Sheet `תלמידות`, header row at physical row 4, data rows 5–88.
+- Includes current school/class, academic level, all support categories, and
+  friendship requests.
+- Its default mandatory category rules are intentionally infeasible, so a
+  normal test session begins with a meaningful conversation about the
+  smallest safe relaxations.
+- The `Test Guide` sheet contains suggested prompts and known scenario facts.
 
-The source file has **no columns** for differential-student status,
-inclusion status, ח"מ status, or friendship requests. These are entered on
-the **"הזנת נתונים ידנית"** screen — a name-aware bulk editor (search by name
-or id, per-student category toggles and a friends-requests field) that
-auto-saves and persists — or imported from a supplementary CSV/Excel keyed by
-student id. **Until this data is entered, the demographic hard-constraints
-cannot be met and the solve is reported infeasible** (with a one-click path to
-soften them).
-
-A different workbook can be uploaded instead, as long as you adjust the
-header/data-row settings and remap columns on the data screen.
+Uploaded school files are detected and mapped independently; they do not
+inherit the bundled scenario's row bounds.
 
 ## Optimization logic
 
@@ -163,15 +157,19 @@ reproducibility. **The original input workbook is never written to.**
   `sample_data/reference_scan.png` as a reference image only. Any "target
   distribution" implied by the scan must be typed in manually — it is never
   parsed automatically.
-- Differential / inclusion / ח"מ / friendship-request data do not exist in
-  the source workbook and must be entered manually or imported — the app does
-  not infer or guess these.
+- Uploaded workbooks that omit differential / inclusion / ח"מ / friendship
+  data require manual completion or an import; the app does not invent those
+  values. The bundled stress scenario already includes these fields.
 - Friendship name matching is normalized-string based; typos beyond
   nikud/whitespace/quote normalization are reported as unmatched for manual
   handling, not guessed.
 - Sessions are per-browser, single-machine, no auth, no shared database.
 - The synthetic dataset in `sample_data/synthetic_students.xlsx` uses clearly
   fake placeholder names and is for tests/demos only.
+- `sample_data/conversational_demo_students.xlsx` is a richer, fully anonymized
+  72-student demo with resolved friendship requests and feasible support
+  categories. Use it to exercise multi-option solving and conversational
+  friendship-versus-academic-balance tradeoffs without real student data.
 
 ## Project layout
 

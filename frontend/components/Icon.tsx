@@ -24,6 +24,7 @@ const PATHS: Record<string, { d: string; fill?: boolean }> = {
   plus: { d: "M12 5v14M5 12h14" },
   minus: { d: "M5 12h14" },
   sliders: { d: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h10M18 18h2M14 4v4M8 10v4M14 16v4" },
+  history: { d: "M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2" },
 };
 
 export type IconName = keyof typeof PATHS;

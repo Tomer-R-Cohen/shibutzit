@@ -1,8 +1,11 @@
 "use client";
 
 import clsx from "clsx";
+import { useEffect, useRef } from "react";
+import { Icon } from "@/components/Icon";
+import { ConstraintModel } from "@/lib/api";
 import { ConstraintsSummary, Highlight, InspectorState, Workspace } from "@/lib/workspace";
-import OverviewInspector from "./inspector/OverviewInspector";
+import OverviewInspector, { OverviewInspectorPreview } from "./inspector/OverviewInspector";
 import ConstraintBrowser from "./inspector/ConstraintBrowser";
 import ConstraintInspector from "./inspector/ConstraintInspector";
 
@@ -11,7 +14,7 @@ import ConstraintInspector from "./inspector/ConstraintInspector";
 // wiring up the rest of useWorkspace()'s real-API surface.
 export type ContextInspectorWorkspace = Pick<
   Workspace,
-  "inspector" | "setInspector" | "refreshConstraintsSummary" | "refreshResultState" | "appendRunConfigChange" | "dataVersion" | "bumpDataVersion"
+  "inspector" | "setInspector" | "refreshConstraintsSummary" | "refreshResultState" | "appendRunConfigChange" | "appendVersionRestore" | "dataVersion" | "bumpDataVersion"
 > & {
   constraintsSummary: ConstraintsSummary | null;
 };
@@ -27,19 +30,29 @@ export default function ContextInspector({
   workspace,
   studentCount,
   onOpenRoster,
+  onOpenResults,
   highlight,
   onHighlight,
   sheetOpen,
+  onCloseSheet,
+  overviewPreview,
+  constraintPreview,
 }: {
   workspace: ContextInspectorWorkspace;
   studentCount: number | null;
   onOpenRoster?: () => void;
+  onOpenResults?: () => void;
   highlight?: Highlight;
   onHighlight?: (h: Highlight) => void;
   /** Only meaningful below 900px, where the pane is a sheet rather than a column. */
   sheetOpen?: boolean;
+  onCloseSheet?: () => void;
+  /** Development-only deterministic overview data for screenshot fixtures. */
+  overviewPreview?: OverviewInspectorPreview;
+  /** Development-only deterministic rule data for screenshot fixtures. */
+  constraintPreview?: ConstraintModel[];
 }) {
-  const { inspector, setInspector, constraintsSummary, refreshConstraintsSummary, refreshResultState, appendRunConfigChange, dataVersion, bumpDataVersion } =
+  const { inspector, setInspector, constraintsSummary, refreshConstraintsSummary, refreshResultState, appendRunConfigChange, appendVersionRestore, dataVersion, bumpDataVersion } =
     workspace;
 
   function open(state: InspectorState) {
@@ -47,6 +60,46 @@ export default function ContextInspector({
   }
 
   const modeKey = inspector.type === "constraint" ? `constraint:${inspector.id}` : inspector.type;
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const inspectorRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    inspectorRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [modeKey]);
+
+  useEffect(() => {
+    if (!sheetOpen) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseSheet?.();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        inspectorRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter((element) => element.getClientRects().length > 0);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
+  }, [sheetOpen, onCloseSheet]);
 
   function content() {
     switch (inspector.type) {
@@ -58,6 +111,7 @@ export default function ContextInspector({
             refreshKey={dataVersion}
             highlight={highlight ?? null}
             onHighlight={onHighlight}
+            previewConstraints={constraintPreview}
           />
         );
       case "constraint":
@@ -71,6 +125,7 @@ export default function ContextInspector({
               void refreshResultState();
             }}
             onRemoved={() => open({ type: "constraints" })}
+            previewConstraint={constraintPreview?.find((constraint) => constraint.id === inspector.id)}
           />
         );
       default:
@@ -80,22 +135,37 @@ export default function ContextInspector({
             constraintsSummary={constraintsSummary}
             onOpenConstraints={() => open({ type: "constraints" })}
             onOpenRoster={onOpenRoster}
+            onOpenResults={onOpenResults}
             onConstraintsChanged={() => {
               bumpDataVersion();
               void refreshConstraintsSummary();
               void refreshResultState();
             }}
             onRunConfigChange={appendRunConfigChange}
+            onVersionRestored={appendVersionRestore}
             refreshKey={dataVersion}
             hasDataset={studentCount != null}
+            preview={overviewPreview}
           />
         );
     }
   }
 
   return (
-    <aside id="ws-inspector" className={clsx("ws-inspector", sheetOpen && "open")}>
-      <div key={modeKey} className="ws-insp-mode">
+    <aside
+      ref={inspectorRef}
+      id="ws-inspector"
+      className={clsx("ws-inspector", sheetOpen && "open")}
+      aria-label="תמונת מצב של הפרויקט"
+      role={sheetOpen ? "dialog" : undefined}
+      aria-modal={sheetOpen ? true : undefined}
+    >
+      {sheetOpen && (
+        <button ref={closeRef} type="button" className="ws-inspector-close" onClick={onCloseSheet} aria-label="סגירת תמונת המצב">
+          <Icon name="x" size={16} />
+        </button>
+      )}
+      <div key={modeKey} className={clsx("ws-insp-mode", inspector.type === "overview" && "overview")}>
         {content()}
       </div>
     </aside>
