@@ -74,7 +74,7 @@ export function DatasetReadyArtifact({
         <div className="ws-artifact-note ws-artifact-note-muted">לא נמצאו נתונים עבור: {missingFields.join(" · ")}. אפשר להמשיך בלעדיהם או להשלים בהמשך.</div>
       )}
       <div className="ws-artifact-actions">
-        <button type="button" className="ws-link" onClick={onOpenRoster}>
+        <button type="button" className="ws-link" onClick={() => onOpenRoster()}>
           צפייה ברשימת התלמידות
         </button>
       </div>
