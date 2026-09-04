@@ -352,7 +352,7 @@ function InspectorCard({
   return (
     <div className="ws-insp-card">
       {onOpen ? (
-        <button className="ws-insp-card-head" onClick={onOpen}>
+        <button className="ws-insp-card-head" onClick={() => onOpen()}>
           {head}
         </button>
       ) : (
