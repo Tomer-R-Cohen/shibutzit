@@ -280,7 +280,7 @@ export default function DatasetOnboarding({
               <span className="ws-mapping-icon" aria-hidden><Icon name="sliders" size={18} /></span>
               <div className="ws-mapping-copy">
                 <h2>צריך לזהות עוד כמה עמודות</h2>
-                <p>לא ניחשתי בבטחה מה משמעות העמודות הבאות. בחרו את העמודה המתאימה מהקובץ.</p>
+                <p>לא הצלחתי לשייך את העמודות האלה בוודאות. בחרו את המתאימה מהקובץ.</p>
               </div>
               <div className="ws-mapping-fields">
                 {fieldsNeedingChoice(mappingGuess, mappingGuess.mapping).map((field) => (

@@ -398,7 +398,6 @@ export default function ResultsBoard({
               <h1>חלוקת הכיתות</h1>
               <span className={boardStatus.tone}>{boardStatus.label}</span>
             </div>
-            <p>סקירה, בדיקה והעברה ידנית של תלמידות בין הכיתות</p>
           </div>
           <div className="cw-board-actions">
             {onAskAI && (
