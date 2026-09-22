@@ -7,7 +7,7 @@ import { Icon } from "@/components/Icon";
 import { Skeleton } from "@/components/ui/primitives";
 import { ClassFocus, ClassWall, ClassWallLegend, CategoryKey, StudentRow, Thresholds, fullName } from "@/components/ClassWall";
 import { StudentDrawer } from "@/components/StudentDrawer";
-import { ApiError, ConstraintModel, GlobalMetrics, ReviewGroup, approveVersion, fetchExportBlob, getConstraints, getResultState, getResultsMetrics, getResultsStudents, getResultsViolations, getRunConfig, getVersions, moveStudent } from "@/lib/api";
+import { ApiError, ConstraintModel, GlobalMetrics, ReviewGroup, VerificationReport, approveVersion, fetchExportBlob, getConstraints, getResultState, getResultsMetrics, getResultsStudents, getResultsVerification, getResultsViolations, getRunConfig, getVersions, moveStudent } from "@/lib/api";
 
 const CATEGORY_FILTERS: { key: CategoryKey; cls: string; label: string }[] = [
   { key: "שילוב", cls: "incl", label: "שילוב" },
@@ -64,6 +64,7 @@ export default function ResultsBoard({
     metrics: GlobalMetrics;
     reviewGroups?: ReviewGroup[];
     violationRows?: Record<string, unknown>[];
+    verification?: VerificationReport;
     approved?: boolean;
     stale?: boolean;
     selectedStudentId?: number;
@@ -87,6 +88,7 @@ export default function ResultsBoard({
   const [violationsCount, setViolationsCount] = useState(0);
   const [violationRows, setViolationRows] = useState<Record<string, unknown>[]>([]);
   const [metrics, setMetrics] = useState<GlobalMetrics | null>(null);
+  const [verification, setVerification] = useState<VerificationReport | null>(null);
   const [adjusting, setAdjusting] = useState(false);
   const adjustingRef = useRef(false);
   const [stale, setStale] = useState(false);
@@ -119,12 +121,13 @@ export default function ResultsBoard({
         setViolationsCount(fixtureData.metrics.violations_count);
         setMetrics(fixtureData.metrics);
         setViolationRows(fixtureData.violationRows ?? []);
+        setVerification(fixtureData.verification ?? null);
         setStale(fixtureData.stale ?? false);
         setLoading(false);
         return;
       }
-      Promise.all([getResultsStudents(), getConstraints(), getRunConfig(), getVersions(), getResultsMetrics(), getResultsViolations(), getResultState()])
-        .then(([s, c, rc, vh, metrics, violations, state]) => {
+      Promise.all([getResultsStudents(), getConstraints(), getRunConfig(), getVersions(), getResultsMetrics(), getResultsViolations(), getResultState(), getResultsVerification()])
+        .then(([s, c, rc, vh, metrics, violations, state, verified]) => {
           setStudents(s.rows as unknown as StudentRow[]);
           setReviewGroups(s.review_groups ?? []);
           setThresholds(thresholdsOf(c.constraints));
@@ -135,6 +138,7 @@ export default function ResultsBoard({
           setMetrics(metrics);
           setViolationRows(violations.rows);
           setStale(state.is_stale);
+          setVerification(verified);
         })
         .catch((e) => setError(e instanceof ApiError ? e.message : "לא הצלחנו לטעון את התוצאות"))
         .finally(() => setLoading(false));
@@ -187,12 +191,14 @@ export default function ResultsBoard({
 
   async function refreshViolationReport() {
     try {
-      const report = await getResultsViolations();
+      const [report, verified] = await Promise.all([getResultsViolations(), getResultsVerification()]);
       setViolationRows(report.rows);
+      setVerification(verified);
     } catch {
       // Keep the authoritative count from the move response, but never show
       // stale per-rule details if the follow-up report could not be loaded.
       setViolationRows([]);
+      setVerification(null);
     }
   }
 
@@ -214,12 +220,13 @@ export default function ResultsBoard({
     adjustingRef.current = true;
     setAdjusting(true);
     try {
-      const [studentRows, latestMetrics, violations, versions, state] = await Promise.all([
+      const [studentRows, latestMetrics, violations, versions, state, verified] = await Promise.all([
         getResultsStudents(),
         getResultsMetrics(),
         getResultsViolations(),
         getVersions(),
         getResultState(),
+        getResultsVerification(),
       ]);
       setStudents(studentRows.rows as unknown as StudentRow[]);
       setReviewGroups(studentRows.review_groups ?? []);
@@ -229,6 +236,7 @@ export default function ResultsBoard({
       setCurrentVersionId(versions.current_version_id);
       setApproved(versions.versions.find((version) => version.id === versions.current_version_id)?.approved ?? false);
       setStale(state.is_stale);
+      setVerification(verified);
       setSyncError(null);
       toast.success("פרטי השיבוץ עודכנו");
     } catch (e) {
@@ -437,6 +445,24 @@ export default function ResultsBoard({
             <div className={warningCount ? "attention" : ""}><span>דורשות בדיקה</span><strong>{warningCount}</strong></div>
             <div><span>מקובעות</span><strong>{lockedCount}</strong></div>
           </div>
+        )}
+
+        {!loading && !error && verification && (
+          <details className={`cw-verification-report ${verification.is_valid ? "is-valid" : "is-invalid"}`}>
+            <summary>
+              <span>{verification.is_valid ? "הבדיקה העצמאית עברה" : "הבדיקה העצמאית מצאה חריגות"}</span>
+              <strong>{verification.hard_rules_satisfied} כללי חובה תקינים · {verification.hard_rules_violated} חריגות</strong>
+            </summary>
+            <p>{verification.students_assigned} מתוך {verification.students_expected} תלמידים משובצים. התוצאה חושבה מחדש מכללי המערכת ואינה מסתמכת על דיווח הפותר.</p>
+            <ul>
+              {verification.checks.map((check) => (
+                <li key={check.constraint_id} className={check.status}>
+                  <span aria-hidden>{check.status === "satisfied" ? "✓" : check.status === "violated" ? "!" : "–"}</span>
+                  <div><strong>{check.label}</strong><small>{check.summary}</small></div>
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
 
         {!loading && !error && violationsCount > 0 && (

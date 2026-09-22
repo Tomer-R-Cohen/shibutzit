@@ -124,6 +124,11 @@ class Session:
     # agent turn and persisted with the rest of the authoritative inputs.
     user_notes: list[str] = field(default_factory=list)
     decision_history: list[dict] = field(default_factory=list)
+    # Inferences never replace explicit constraints.  They are evidence for
+    # future ranking, with a confidence that can rise or fall as decisions
+    # accumulate.
+    inferred_preferences: list[dict] = field(default_factory=list)
+    decision_portfolio: list[dict] = field(default_factory=list)
     assignment_versions: list[AssignmentVersion] = field(default_factory=list)
     current_version_id: Optional[str] = None
     chat_history: list[dict] = field(default_factory=list)
@@ -238,6 +243,8 @@ class SessionStore:
             ],
             "user_notes": list(sess.user_notes),
             "decision_history": list(sess.decision_history),
+            "inferred_preferences": list(sess.inferred_preferences),
+            "decision_portfolio": list(sess.decision_portfolio),
             "assignment_versions": [asdict(v) for v in sess.assignment_versions],
             "current_version_id": sess.current_version_id,
             "chat_history": sess.chat_history,
@@ -361,6 +368,13 @@ class SessionStore:
         raw_decisions = payload.get("decision_history")
         if isinstance(raw_decisions, list):
             sess.decision_history = [d for d in raw_decisions if isinstance(d, dict)][-100:]
+
+        raw_preferences = payload.get("inferred_preferences")
+        if isinstance(raw_preferences, list):
+            sess.inferred_preferences = [item for item in raw_preferences if isinstance(item, dict)][-50:]
+        raw_portfolio = payload.get("decision_portfolio")
+        if isinstance(raw_portfolio, list):
+            sess.decision_portfolio = [item for item in raw_portfolio if isinstance(item, dict)][-10:]
 
         raw_versions = payload.get("assignment_versions")
         if isinstance(raw_versions, list):

@@ -351,7 +351,7 @@ def build_constraints_context(constraints: list[Constraint]) -> str:
     )
 
 
-def build_project_memory_context(notes=None, decisions=None) -> str:
+def build_project_memory_context(notes=None, decisions=None, inferred_preferences=None) -> str:
     durable = [str(n) for n in (notes or []) if str(n).strip()]
     recent = list(decisions or [])[-12:]
     lines = ["זיכרון פרויקט מובנה (מקור סמכות, לא הצעה):"]
@@ -372,6 +372,13 @@ def build_project_memory_context(notes=None, decisions=None) -> str:
             lines.append(f"- {status}{subject}: {decision.get('summary', 'שינוי ללא תיאור')}")
     else:
         lines.append("החלטות קודמות: אין.")
+    inferred = [item for item in (inferred_preferences or []) if isinstance(item, dict)]
+    if inferred:
+        lines.append("Inferred preferences (advisory only, never mandatory rules):")
+        for item in inferred:
+            confidence = round(float(item.get("confidence", 0)) * 100)
+            description = item.get("description", item.get("key", "preference"))
+            lines.append(f"- {description} — confidence {confidence}%, based on {item.get('observations', 0)} decisions")
     return "\n".join(lines)
 
 
