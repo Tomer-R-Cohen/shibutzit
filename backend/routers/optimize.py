@@ -17,6 +17,7 @@ from src.column_mapping import (
     FIELD_STUDENT_ID,
 )
 from src.constraints import Constraint, capacity_range_label_hebrew, locked_constraints, resolve_group_members
+from src.decision_support import assignment_distance, generate_portfolio, negotiation_question, profile_constraints, verify_assignment
 from src.feasibility import analyze_feasibility
 from src.manual_adjustments import AdjustmentState, ManualAdjustmentError, apply_editor_dataframe
 from src.metrics import class_overview_table, compute_global_metrics, student_assignment_table, violations_report
@@ -25,7 +26,7 @@ from src.friendship_graph import resolve_requests, unmatched_report
 from src.validation import validate_students
 
 from ..llm.narration import narrate_infeasibility, narrate_result, relaxation_candidate
-from ..schemas import LockingRequest, MoveStudentRequest
+from ..schemas import LockingRequest, MoveStudentRequest, SelectDecisionOptionRequest
 from ..session_store import AssignmentVersion, PendingProposal, Session, store
 from ..solver_inputs import build_locked_constraints, build_solver_inputs
 from ..utils import df_records, require
@@ -467,6 +468,7 @@ def run_optimize(x_session_id: str = Header(...), alternative: bool = False, inc
     if sess.validation_report.has_errors():
         raise HTTPException(status_code=400, detail="קיימות שגיאות אימות חוסמות (שלב 4). יש לתקן לפני ההרצה.")
 
+    previous_assignment = dict(sess.adjustment_state.assignment) if alternative and sess.adjustment_state else None
     if alternative:
         # Advance to another deterministic tie-breaker and persist it so the
         # exported configuration exactly reproduces the selected option.
@@ -477,12 +479,45 @@ def run_optimize(x_session_id: str = Header(...), alternative: bool = False, inc
     constraints = constraints + build_locked_constraints(sess)
     matched = sess.friendship_result.matched if sess.friendship_result else {}
     locked = sess.locked_assignment or {}
+    strategy = "balanced" if not alternative else ("preferences" if cfg.random_seed % 2 else "balance")
+    solver_constraints = profile_constraints(constraints, strategy)
 
     try:
-        result = optimize(df, cfg, constraints, friendship_matched=matched)
+        result = optimize(
+            df,
+            cfg,
+            solver_constraints,
+            friendship_matched=matched,
+            excluded_assignments=[previous_assignment] if previous_assignment else None,
+            min_assignment_distance=max(1, len(df) // 20),
+        )
     except OptimizationError as e:
         logger.warning("optimize() raised for session %s: %s", x_session_id, e)
         raise HTTPException(status_code=400, detail=str(e))
+
+    # The only reason an otherwise feasible alternative run can become
+    # infeasible here is the diversity cut.  That means "no additional
+    # distinct option", not "the business rules have no solution".  Keep the
+    # already verified assignment current and do not stage a bogus relaxation.
+    if alternative and previous_assignment and (
+        not result.is_feasible
+        or assignment_distance(previous_assignment, result.assignment, cfg.num_classes) == 0
+    ):
+        sess.run_config.random_seed -= 1
+        sess.input_revision = max(0, sess.input_revision - 1)
+        store.save(sess)
+        return {
+            "status_name": "NO_DISTINCT_ALTERNATIVE",
+            "is_feasible": True,
+            "no_distinct_alternative": True,
+            "wall_time_seconds": result.wall_time_seconds,
+            "objective_value": None,
+            "infeasibility_notes": [],
+            "conflicting_constraint_ids": [],
+            "result_state": sess.result_state(),
+            "version": None,
+            "verification": verify_assignment(df, previous_assignment, constraints, cfg.num_classes, matched).to_dict(),
+        }
 
     _prefer_proven_arithmetic_conflicts(result, df, constraints, cfg.num_classes)
 
@@ -520,6 +555,10 @@ def run_optimize(x_session_id: str = Header(...), alternative: bool = False, inc
         "result_comment": comment,
         "result_state": sess.result_state(),
         "version": {"id": version.id, "number": version.number} if version else None,
+        "verification": (
+            verify_assignment(df, result.assignment, constraints, cfg.num_classes, matched).to_dict()
+            if result.is_feasible else None
+        ),
     }
 
 
@@ -607,14 +646,15 @@ def approve_version(version_id: str, x_session_id: str = Header(...)):
         )
     version_constraints = [Constraint(**raw) for raw in version.constraints]
     version_constraints += locked_constraints(version.locked_assignment, hard=True)
-    violations_count = len(
-        violations_report(
-            sess.mapped_df,
-            version.assignment,
-            version_constraints,
-            int(version.run_config["num_classes"]),
-        )
+    matched = sess.friendship_result.matched if sess.friendship_result else {}
+    independent = verify_assignment(
+        sess.mapped_df,
+        version.assignment,
+        version_constraints,
+        int(version.run_config["num_classes"]),
+        matched,
     )
+    violations_count = independent.hard_rules_violated
     version.metrics["violations_count"] = violations_count
     if violations_count > 0:
         raise HTTPException(
@@ -687,6 +727,146 @@ def results_violations(x_session_id: str = Header(...)):
         cfg.num_classes,
     )
     return {"rows": df_records(table)}
+
+
+@router.get("/api/results/verification")
+def results_verification(x_session_id: str = Header(...)):
+    """Independent, exhaustive verification of the current assignment.
+
+    This endpoint intentionally does not expose CP-SAT's feasibility flag as
+    evidence.  It recomputes every active business rule from the roster and
+    assignment, including soft rules and assignment completeness.
+    """
+    sess = store.get_or_create(x_session_id)
+    _require_result(sess)
+    cfg, constraints = build_solver_inputs(sess)
+    constraints += locked_constraints(sess.adjustment_state.locked_assignment(), hard=True)
+    matched = sess.friendship_result.matched if sess.friendship_result else {}
+    report = verify_assignment(
+        sess.mapped_df, sess.adjustment_state.assignment, constraints, cfg.num_classes, matched
+    )
+    return report.to_dict()
+
+
+@router.post("/api/decision-support/portfolio")
+def create_decision_portfolio(x_session_id: str = Header(...), max_options: int = 4):
+    """Create alternatives before asking the counselor to choose.
+
+    Feasible cases use different objective profiles.  Infeasible cases trial
+    one narrowly relaxed hard rule at a time and verify each result against
+    the original rules, so compromises remain explicit.
+    """
+    sess = store.get_or_create(x_session_id)
+    df = require(sess.mapped_df, "יש להשלים את שלבי הנתונים תחילה.")
+    sess.validation_report = validate_students(df)
+    if sess.validation_report.has_errors():
+        raise HTTPException(status_code=400, detail="קיימות שגיאות אימות חוסמות שיש לתקן לפני יצירת חלופות.")
+    sess.friendship_result = resolve_requests(df)
+    cfg, constraints = build_solver_inputs(sess)
+    constraints += build_locked_constraints(sess)
+    matched = sess.friendship_result.matched if sess.friendship_result else {}
+    options, conflicts = generate_portfolio(
+        df, cfg, constraints, matched, max_options=max(2, min(4, max_options))
+    )
+    stored = [option.to_dict(include_assignment=True) for option in options]
+    sess.decision_portfolio = stored
+    store.save(sess)
+    by_id = {constraint.id: constraint.label_hebrew for constraint in constraints}
+    return {
+        "has_perfect_solution": any(option.verification.is_valid for option in options),
+        "options": [option.to_dict(include_assignment=False) for option in options],
+        "conflicts": [{"constraint_id": item, "label": by_id.get(item, item)} for item in conflicts],
+        "question": negotiation_question(options),
+        "message": (
+            f"נמצאו {len(options)} חלופות שונות והשיבוץ המוצג בכל אחת נבדק מחדש."
+            if options else "לא נמצאה חלופה ישימה גם לאחר בדיקת הקלות ממוקדות."
+        ),
+    }
+
+
+@router.get("/api/decision-support/portfolio")
+def get_decision_portfolio(x_session_id: str = Header(...)):
+    sess = store.get_or_create(x_session_id)
+    public = [{key: value for key, value in item.items() if key != "assignment"} for item in sess.decision_portfolio]
+    # Reconstruct just enough for a deterministic question without trusting
+    # stored prose; the POST response already contains the richer question.
+    return {"options": public, "inferred_preferences": list(sess.inferred_preferences)}
+
+
+def _learn_option_preference(sess: Session, chosen: dict) -> None:
+    strategy = chosen.get("strategy", "balanced")
+    existing = next((item for item in sess.inferred_preferences if item.get("key") == strategy), None)
+    if existing is None:
+        existing = {
+            "key": strategy,
+            "description": f"The coordinator tends to prefer the '{strategy}' assignment strategy.",
+            "kind": "inferred_preference",
+            "explicit": False,
+            "observations": 0,
+            "confidence": 0.0,
+        }
+        sess.inferred_preferences.append(existing)
+    existing["observations"] = int(existing.get("observations", 0)) + 1
+    existing["confidence"] = round(min(0.95, 0.5 + 0.1 * (existing["observations"] - 1)), 2)
+    existing["last_updated"] = datetime.now(timezone.utc).isoformat()
+
+
+@router.post("/api/decision-support/select")
+def select_decision_option(req: SelectDecisionOptionRequest, x_session_id: str = Header(...)):
+    """Record a choice and either apply it or stage its required compromise."""
+    sess = store.get_or_create(x_session_id)
+    chosen = next((item for item in sess.decision_portfolio if item.get("id") == req.option_id), None)
+    if chosen is None:
+        raise HTTPException(status_code=404, detail="חלופת השיבוץ לא נמצאה או שאינה עדכנית.")
+    _learn_option_preference(sess, chosen)
+    sess.decision_history.append({
+        "at": datetime.now(timezone.utc).isoformat(),
+        "decision": "approved",
+        "kind": "option_selection",
+        "summary": req.reason or f"נבחרה {chosen.get('title', req.option_id)}",
+        "option_id": req.option_id,
+        "rejected_option_ids": [item.get("id") for item in sess.decision_portfolio if item.get("id") != req.option_id],
+    })
+    sess.decision_history = sess.decision_history[-100:]
+
+    verification = chosen.get("verification") or {}
+    if not verification.get("is_valid", False):
+        relaxed = chosen.get("relaxed_constraint_ids") or []
+        target = next((constraint for constraint in sess.constraints if constraint.id in relaxed), None)
+        if target is None:
+            store.save(sess)
+            raise HTTPException(status_code=409, detail="החלופה דורשת פשרה שלא ניתן להחיל אוטומטית.")
+        proposal = PendingProposal(
+            kind="modify",
+            summary_hebrew=f'כדי להשתמש בחלופה שנבחרה יש להפוך את "{target.label_hebrew}" מכלל חובה להעדפה. השינוי דורש אישור מפורש.',
+            target_constraint_id=target.id,
+            changes={"hard": False},
+            evidence={"basis": "measured_trial", "trial_feasible": True, "changes_hard_rule": True},
+        )
+        sess.pending_proposal = proposal
+        store.save(sess)
+        return {"applied": False, "requires_confirmation": True, "proposal": asdict(proposal),
+                "inferred_preferences": list(sess.inferred_preferences)}
+
+    assignment = {int(student_id): int(group) for student_id, group in chosen["assignment"].items()}
+    cfg, constraints = build_solver_inputs(sess)
+    matched = sess.friendship_result.matched if sess.friendship_result else {}
+    fresh = verify_assignment(sess.mapped_df, assignment, constraints + build_locked_constraints(sess), cfg.num_classes, matched)
+    if not fresh.is_valid:
+        store.save(sess)
+        raise HTTPException(status_code=409, detail="הכללים השתנו מאז יצירת החלופות; יש ליצור חלופות מחדש.")
+    sess.opt_result = OptimizationResult(
+        status_name="VERIFIED_PORTFOLIO", is_feasible=True, assignment=assignment,
+        objective_value=chosen.get("objective_value"), wall_time_seconds=float(chosen.get("wall_time_seconds", 0.0)),
+    )
+    sess.adjustment_state = AdjustmentState(assignment=assignment, locked=set(sess.locked_assignment))
+    sess.mark_solved()
+    version = _create_version(sess, cfg, constraints, chosen.get("title", "חלופה נבחרת"))
+    store.save(sess)
+    return {"applied": True, "requires_confirmation": False,
+            "version": {"id": version.id, "number": version.number},
+            "verification": fresh.to_dict(), "result_state": sess.result_state(),
+            "inferred_preferences": list(sess.inferred_preferences)}
 
 
 @router.get("/api/results/friendship")

@@ -1956,7 +1956,7 @@ def _process_chat_message(req: ChatMessageRequest, x_session_id: str, on_text_de
         build_result_context(has_result, cfg.num_classes, class_sizes, stale=sess.result_state()["is_stale"]),
         build_dataset_columns_context(sess.dataset_schema),
         build_planning_context(df is None, cfg.num_classes, sess.data_requirements),
-        build_project_memory_context(sess.user_notes, sess.decision_history),
+        build_project_memory_context(sess.user_notes, sess.decision_history, sess.inferred_preferences),
     ) + evidence_context
 
     try:
@@ -2268,7 +2268,7 @@ def _continue_after_solver(req: SolverResultFollowupRequest, x_session_id: str, 
         build_result_context(True, cfg.num_classes, sizes, stale=sess.result_state()["is_stale"]),
         build_dataset_columns_context(sess.dataset_schema),
         build_planning_context(False, cfg.num_classes, sess.data_requirements),
-        build_project_memory_context(sess.user_notes, sess.decision_history),
+        build_project_memory_context(sess.user_notes, sess.decision_history, sess.inferred_preferences),
     ) + (
         "\n\nThe solver run requested by the counselor has just completed. This is a read-only continuation turn. "
         "Call get_assignment_versions and any other read tools needed, then continue the original conversation "
@@ -2553,6 +2553,7 @@ def get_project_memory(x_session_id: str = Header(...)):
     return {
         "notes": list(sess.user_notes),
         "decisions": list(sess.decision_history[-20:]),
+        "inferred_preferences": list(sess.inferred_preferences),
     }
 
 

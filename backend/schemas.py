@@ -52,5 +52,10 @@ class MoveStudentRequest(BaseModel):
     locked: Optional[bool] = None
 
 
+class SelectDecisionOptionRequest(BaseModel):
+    option_id: str
+    reason: Optional[str] = None
+
+
 class ErrorResponse(BaseModel):
     detail: str

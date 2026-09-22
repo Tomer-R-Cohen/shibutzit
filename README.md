@@ -171,6 +171,15 @@ reproducibility. **The original input workbook is never written to.**
   categories. Use it to exercise multi-option solving and conversational
   friendship-versus-academic-balance tradeoffs without real student data.
 
+## Decision-support API
+
+The solver is followed by an independent decision layer:
+
+- `GET /api/results/verification` re-evaluates assignment integrity and every active hard and soft rule without trusting solver status.
+- `POST /api/decision-support/portfolio` generates distinct objective profiles; if no perfect assignment exists, it trials one explicit relaxation at a time and reports each compromise against the original rules.
+- `POST /api/decision-support/select` records the choice, applies a valid option, or stages a hard-rule relaxation for explicit confirmation.
+- Learned tendencies are stored as inferred preferences with observation counts and confidence. They remain separate from explicit rules and are never silently promoted to hard constraints.
+
 ## Project layout
 
 ```

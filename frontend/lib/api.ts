@@ -456,6 +456,77 @@ export interface OptimizeResponse {
   result_comment?: string | null;
   result_state?: ResultState;
   version?: { id: string; number: number } | null;
+  verification?: VerificationReport | null;
+  no_distinct_alternative?: boolean;
+}
+export interface RuleCheck {
+  constraint_id: string;
+  label: string;
+  rule_type: string;
+  hard: boolean;
+  status: "satisfied" | "violated" | "not_applicable";
+  summary: string;
+  expected: unknown;
+  actual: unknown;
+  affected_students: number[];
+  affected_groups: Array<number | string>;
+}
+export interface VerificationReport {
+  is_valid: boolean;
+  summary: string;
+  students_expected: number;
+  students_assigned: number;
+  hard_rules_satisfied: number;
+  hard_rules_violated: number;
+  soft_rules_satisfied: number;
+  soft_rules_violated: number;
+  checks: RuleCheck[];
+}
+export interface DecisionOption {
+  id: string;
+  title: string;
+  strategy: string;
+  verification: VerificationReport;
+  metrics: GlobalMetrics;
+  compromises: string[];
+  relaxed_constraint_ids: string[];
+  objective_value: number | null;
+  wall_time_seconds: number;
+  differs_from_first: number;
+}
+export interface InferredPreference {
+  key: string;
+  description: string;
+  kind: "inferred_preference";
+  explicit: false;
+  observations: number;
+  confidence: number;
+  last_updated?: string;
+}
+export function getResultsVerification() {
+  return request<VerificationReport>("/api/results/verification");
+}
+export function generateDecisionPortfolio(maxOptions = 4) {
+  return request<{
+    has_perfect_solution: boolean;
+    options: DecisionOption[];
+    conflicts: Array<{ constraint_id: string; label: string }>;
+    question: { question: string; options: string[]; reason: string } | null;
+    message: string;
+  }>("/api/decision-support/portfolio", { method: "POST", params: { max_options: maxOptions } });
+}
+export function getDecisionPortfolio() {
+  return request<{ options: DecisionOption[]; inferred_preferences: InferredPreference[] }>("/api/decision-support/portfolio");
+}
+export function selectDecisionOption(optionId: string, reason?: string) {
+  return request<{
+    applied: boolean;
+    requires_confirmation: boolean;
+    proposal?: PendingProposal;
+    version?: { id: string; number: number };
+    verification?: VerificationReport;
+    inferred_preferences: InferredPreference[];
+  }>("/api/decision-support/select", { method: "POST", body: JSON.stringify({ option_id: optionId, reason }) });
 }
 export interface ProjectDecision {
   at: string;
@@ -464,7 +535,7 @@ export interface ProjectDecision {
   summary: string;
 }
 export function getProjectMemory() {
-  return request<{ notes: string[]; decisions: ProjectDecision[] }>("/api/project-memory");
+  return request<{ notes: string[]; decisions: ProjectDecision[]; inferred_preferences?: InferredPreference[] }>("/api/project-memory");
 }
 export function runOptimize(alternative = false, includeComment = true) {
   return request<OptimizeResponse>("/api/optimize", {

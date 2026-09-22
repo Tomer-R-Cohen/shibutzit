@@ -68,6 +68,8 @@ def optimize(
     config: SolverConfig,
     constraints: list[Constraint],
     friendship_matched: Optional[dict[int, list[int]]] = None,
+    excluded_assignments: Optional[list[dict[int, int]]] = None,
+    min_assignment_distance: int = 1,
 ) -> OptimizationResult:
     """Run the CP-SAT optimizer over the given students.
 
@@ -95,6 +97,7 @@ def optimize(
         raise OptimizationError("מספר הכיתות חייב להיות לפחות 1.")
 
     friendship_matched = friendship_matched or {}
+    excluded_assignments = excluded_assignments or []
     active = [c for c in constraints if c.active]
 
     students = df[FIELD_STUDENT_ID].tolist()
@@ -119,6 +122,15 @@ def optimize(
     # Every student assigned exactly one class.
     for sid in students:
         model.Add(sum(x[sid, c] for c in range(k)) == 1)
+
+    # Portfolio generation can ask for another genuinely different answer.
+    # This is deliberately a solver input rather than post-processing: a
+    # different seed alone often returns the same optimum.
+    minimum_distance = max(1, int(min_assignment_distance))
+    for previous in excluded_assignments:
+        same_literals = [x[sid, previous[sid]] for sid in students if sid in previous and 0 <= previous[sid] < k]
+        if same_literals:
+            model.Add(sum(same_literals) <= len(same_literals) - min(minimum_distance, len(same_literals)))
 
     objective_terms = []
     assumption_lits: list[cp_model.IntVar] = []

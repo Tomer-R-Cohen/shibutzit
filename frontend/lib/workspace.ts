@@ -318,7 +318,10 @@ export function useWorkspace() {
     [append, refreshConstraintsSummary, refreshResultState, bumpDataVersion]
   );
 
-  const runSolve = useCallback(async (requestedAlternatives = 1) => {
+  // Generate a small portfolio by default, even when the coordinator only
+  // clicks "solve" once. Explicit conversational requests can still choose
+  // a bounded count below.
+  const runSolve = useCallback(async (requestedAlternatives = 3) => {
     if (solving) return;
     setSolving(true);
     setSolverVisualActive(true);
@@ -354,6 +357,7 @@ export function useWorkspace() {
       for (let optionIndex = 0; optionIndex < alternatives; optionIndex++) {
         const res: OptimizeResponse = await runOptimize(optionIndex > 0, optionIndex === alternatives - 1);
         if (res.result_state) setResultState(res.result_state);
+        if (res.no_distinct_alternative) break;
         if (res.is_feasible) {
         const [metrics, students] = await Promise.all([getResultsMetrics(), getResultsStudents()]);
         const assignments: Record<number, number> = {};
